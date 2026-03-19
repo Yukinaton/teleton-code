@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+client-new/node_modules/
+
+# Build outputs
+dist/
+client-new/dist/
+server/public/
+coverage/
+
+# Local runtime state
+.teleton-code/
+server/.teleton-code/
+logs/
+.agent/
+.publish-smoke/
+*.log
+*.tgz
+
+# Local editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temp and scratch artifacts
+client-new/block_history.txt
+client-new/original_chatview.tsx

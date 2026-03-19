@@ -1,0 +1,13 @@
+.teleton-code/
+logs/
+*.log
+client.log
+client-error.log
+server.log
+server-error.log
+service.log
+codereview.md
+server/.teleton-code/
+client-new/*
+!client-new/dist/
+!client-new/dist/**

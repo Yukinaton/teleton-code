@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9999,
+    "previewPort": 10000
+  },
+  "security": {
+    "ownerOnly": true,
+    "loopbackOnly": true
+  }
+}

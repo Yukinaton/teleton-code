@@ -1,0 +1,332 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-black: #000000;
+  --color-graphite-base: #171717;
+  --color-graphite-hover: #262626;
+  --color-graphite-border: #333333;
+  --color-graphite-card: #1e1e1e;
+  --color-graphite-text: #a1a1aa;
+  
+  --color-primary-50: #f0f9ff;
+  --color-primary-100: #e0f2fe;
+  --color-primary-200: #bae6fd;
+  --color-primary-300: #7dd3fc;
+  --color-primary-400: #38bdf8;
+  --color-primary-500: #3b82f6;
+  --color-primary-600: #2563eb;
+  --color-primary-700: #1d4ed8;
+  --color-primary-800: #1e40af;
+  --color-primary-900: #1e3a8a;
+  --color-primary-950: #082f49;
+
+  --font-sans: "Inter", "system-ui", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* Main Styles */
+
+/* Universal scrollbars - Match Chat/Teleton style exactly */
+* { 
+  scrollbar-width: thin; 
+  scrollbar-color: rgba(150, 150, 150, 0.2) transparent; 
+}
+
+::-webkit-scrollbar { 
+  width: 4px; 
+  height: 4px; 
+}
+
+::-webkit-scrollbar-track { 
+  background: transparent; 
+}
+
+::-webkit-scrollbar-thumb { 
+  background: rgba(150, 150, 150, 0.3); 
+  border-radius: 10px; 
+  transition: background 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover { 
+  background: rgba(150, 150, 150, 0.5); 
+}
+
+/* Syntax Highlighting (for mockup-style blocks) */
+.sh-kw { color: #d73a49; }
+.sh-str { color: #032f62; }
+.sh-func { color: #6f42c1; }
+.sh-tag { color: #22863a; }
+.sh-attr { color: #6f42c1; }
+.sh-comment { color: #6a737d; font-style: italic; }
+
+.dark .sh-kw { color: #c678dd; }
+.dark .sh-str { color: #98c379; }
+.dark .sh-func { color: #61afef; }
+.dark .sh-tag { color: #e06c75; }
+.dark .sh-attr { color: #d19a66; }
+.dark .sh-comment { color: #5c6370; font-style: italic; }
+
+/* Map token- classes to sh- classes for compatibility */
+.token-keyword { color: var(--sh-kw); }
+.token-string { color: var(--sh-str); }
+.token-tag { color: var(--sh-tag); }
+.token-attr { color: var(--sh-attr); }
+
+/* Ensure Monaco Editor scrollbar track is transparent but thumb is colored */
+.monaco-editor .scrollbar {
+  background: transparent !important;
+}
+
+.monaco-editor .scrollbar .slider {
+  background: rgba(150, 150, 150, 0.3) !important;
+  border-radius: 10px !important;
+  left: 0 !important;
+}
+
+.monaco-editor .scrollbar .slider:hover {
+  background: rgba(150, 150, 150, 0.5) !important;
+}
+
+/* Hide Monaco's overview ruler that looks like a thick scrollbar background */
+.monaco-editor .decorationsOverviewRuler {
+  display: none !important;
+}
+
+/* Remove Monaco scroll shadow */
+.monaco-editor .monaco-scrollable-element > .shadow {
+  box-shadow: none !important;
+}
+
+/* Mockup-First: Styles from teleton_fixed.html */
+
+
+.fade-in { animation: fadeIn 0.3s ease-out forwards; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.pop-in { animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+@keyframes popIn { 0% { opacity: 0; transform: scale(0.95) translateY(10px); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
+
+.folder-content { transition: max-height 0.3s ease, opacity 0.3s ease; max-height: 5000px; opacity: 1; overflow: hidden; }
+.folder-content.hidden-folder { max-height: 0; opacity: 0; pointer-events: none; }
+
+.tree-container { position: relative; margin-left: 20px; padding-left: 8px; border-left: 1px solid rgba(150, 150, 150, 0.2); }
+.tree-item { position: relative; }
+.tree-item::before { content: ''; position: absolute; left: -8px; top: 50%; width: 8px; height: 1px; background-color: rgba(150, 150, 150, 0.2); }
+
+/* Syntax Highlighting (for non-monaco blocks) */
+.token-keyword { color: #c678dd; }
+.token-string { color: #98c379; }
+.token-tag { color: #e06c75; }
+.token-attr { color: #d19a66; }
+.token-comment { color: #5c6370; font-style: italic; }
+.light .token-keyword { color: #a626a4; }
+.light .token-string { color: #50a14f; }
+.light .token-tag { color: #e45649; }
+.light .token-attr { color: #986801; }
+.light .token-comment { color: #a0a1a7; }
+
+/* Markdown & Agent Blocks */
+.markdown-body pre { margin: 0; }
+.markdown-body p { margin-bottom: 0.75rem; }
+.markdown-body p:last-child { margin-bottom: 0; }
+.agent-block { position: relative; margin-top: 1rem; margin-bottom: 1rem; }
+.agent-copy {
+  color: rgb(31 41 55);
+  font-size: 0.96rem;
+  line-height: 1.8;
+}
+
+.dark .agent-copy {
+  color: rgb(229 231 235);
+}
+
+.agent-copy h1,
+.agent-copy h2,
+.agent-copy h3,
+.agent-copy h4 {
+  color: rgb(17 24 39);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.dark .agent-copy h1,
+.dark .agent-copy h2,
+.dark .agent-copy h3,
+.dark .agent-copy h4 {
+  color: rgb(255 255 255);
+}
+
+.agent-copy p {
+  margin: 0.5rem 0;
+}
+
+.agent-copy p:first-child {
+  margin-top: 0;
+}
+
+.agent-copy p:last-child {
+  margin-bottom: 0;
+}
+
+.agent-copy ul,
+.agent-copy ol {
+  margin: 0.65rem 0;
+  padding-left: 1.1rem;
+}
+
+.agent-copy li {
+  margin: 0.3rem 0;
+}
+
+.agent-copy code {
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(148, 163, 184, 0.12);
+  padding: 0.12rem 0.38rem;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.dark .agent-copy code {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.agent-copy strong {
+  color: rgb(17 24 39);
+  font-weight: 700;
+}
+
+.dark .agent-copy strong {
+  color: rgb(255 255 255);
+}
+
+.agent-copy blockquote {
+  margin: 0.75rem 0;
+  border-left: 2px solid rgba(37, 99, 235, 0.35);
+  padding-left: 0.9rem;
+  color: rgb(75 85 99);
+}
+
+.dark .agent-copy blockquote {
+  color: rgb(156 163 175);
+}
+
+/* agent-plan-list hover effect */
+.agent-plan-list li:hover .step-icon {
+    background-color: var(--color-primary-600) !important;
+    color: white !important;
+    border-color: var(--color-primary-600) !important;
+}
+
+.selected-row { background-color: rgba(59, 130, 246, 0.1) !important; position: relative; }
+.selected-row::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background-color: #3b82f6; }
+.dark .selected-row { background-color: rgba(59, 130, 246, 0.15) !important; }
+
+/* Diff & Runnable Blocks */
+.diff-block, .runnable-code-block, .terminal-block { transition: all 0.3s ease; }
+.file-state-accepted { opacity: 0.8; border-color: rgba(34, 197, 94, 0.4) !important; box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.2); }
+.file-state-rejected { opacity: 0.55; filter: grayscale(0.8); border-color: rgba(239, 68, 68, 0.3) !important;}
+
+.code-area code { font-family: inherit; }
+
+/* Sidebar Transitions */
+#sidebar {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#sidebar {
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-x: hidden;
+  white-space: nowrap;
+}
+
+#sidebar.collapsed {
+  width: 4.5rem !important;
+  opacity: 1;
+  pointer-events: auto;
+  border-right-width: 1px;
+}
+
+#sidebar.collapsed .sidebar-text,
+#sidebar.collapsed .sidebar-logo-text,
+#sidebar.collapsed .sidebar-actions {
+  display: none !important;
+}
+
+#sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+#sidebar.collapsed .sidebar-btn {
+  padding: 0;
+  justify-content: center;
+  width: 2.75rem !important;
+  height: 2.75rem !important;
+  margin: 0 auto;
+}
+
+#sidebar.collapsed .sidebar-btn > .btn-content {
+  justify-content: center;
+  width: auto;
+  padding: 0;
+}
+
+#main-view {
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(150, 150, 150, 0.3); border-radius: 10px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(150, 150, 150, 0.5); }
+
+/* Форсирование светлой темы для Monaco - МАКСИМАЛЬНЫЙ ПРИОРИТЕТ */
+html.light .monaco-editor,
+html.light .monaco-editor .margin,
+html.light .monaco-editor-background,
+html.light .monaco-editor .inputarea.ime-input,
+html.light .monaco-editor .scroll-node,
+html.light .code-area,
+html.light .runnable-code-block,
+html.light .monaco-editor .margin-view-overlays,
+html.light .monaco-editor .overflow-guard {
+  background-color: #ffffff !important;
+}
+
+html.dark .monaco-editor,
+html.dark .monaco-editor .margin,
+html.dark .monaco-editor-background,
+html.dark .monaco-editor .inputarea.ime-input,
+html.dark .monaco-editor .scroll-node,
+html.dark .code-area,
+html.dark .runnable-code-block,
+html.dark .monaco-editor .margin-view-overlays,
+html.dark .monaco-editor .overflow-guard {
+  background-color: #0a0a0a !important;
+}
+
+/* Глобальный фикс для превью в портале - ИНЛАЙН РЕЖИМ */
+#preview-portal-root {
+  position: absolute;
+  inset: 0; 
+  pointer-events: none;
+  z-index: 60;
+}
+
+#preview-portal-root > * {
+  pointer-events: auto;
+}
+
+/* Принудительные стили для темной темы, если Tailwind v4 капризничает */
+.dark body {
+  background-color: #000000 !important;
+  color: #e2e8f0 !important;
+}
+
+.dark #main-view {
+  background-color: #000000 !important;
+}

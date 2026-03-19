@@ -1,0 +1,53 @@
+{
+  "name": "teleton-code",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Cloud IDE companion for Teleton Agent with a Teleton-powered code agent",
+  "author": "Yukinaton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yukinaton/teleton-code.git"
+  },
+  "homepage": "https://github.com/Yukinaton/teleton-code#readme",
+  "bugs": {
+    "url": "https://github.com/Yukinaton/teleton-code/issues"
+  },
+  "main": "./server/index.js",
+  "keywords": [
+    "teleton",
+    "teleton-agent",
+    "ide",
+    "code-agent",
+    "cloud-ide",
+    "telegram"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "teleton-code": "bin/teleton-code.js"
+  },
+  "files": [
+    "bin/**/*.js",
+    "cli/**/*.js",
+    "docs/assets/**/*.svg",
+    "docs/**/*.md",
+    "scripts/**/*.mjs",
+    "scripts/start-service.cmd",
+    "server/**/*.js",
+    "server/public/**/*",
+    "teleton-code.config.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "npm --prefix client-new run build && node scripts/sync-client-build.mjs",
+    "start": "node bin/teleton-code.js start",
+    "start:server": "node server/index.js",
+    "start:cli": "node bin/teleton-code.js start",
+    "check": "node --check server/index.js && node --check server/app.js && node --check server/application/agent/clarification-flow.js && node --check server/application/agent/session-prompt-service.js && node --check server/application/agent/structured-build-flow.js && node --check server/application/chat/attachment-service.js && node --check server/handlers/file-handler.js && node --check server/handlers/workspace-handler.js && node --check server/lib/config.js && node --check server/lib/state-store.js && node --check server/lib/code-agent-profile.js && node --check server/lib/code-agent-surface.js && node --check server/lib/code-agent-workspace.js && node --check server/lib/code-tool-registry.js && node --check server/lib/coding-tools.js && node --check server/lib/prompt-engine.js && node --check server/lib/runtime-adapter.js && node --check server/lib/workspace-utils.js && node --check scripts/sync-client-build.mjs && node --check cli/index.js && node --check bin/teleton-code.js",
+    "smoke:tools": "node scripts/tool-smoke.mjs",
+    "pack:check": "npm pack --dry-run",
+    "prepack": "npm run build"
+  }
+}
