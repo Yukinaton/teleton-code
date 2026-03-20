@@ -19,5 +19,5 @@ export const useContextStore = create<ContextMenuState>((set) => ({
   targetId: null,
 
   openMenu: (x, y, type, targetId) => set({ isOpen: true, x, y, type, targetId }),
-  closeMenu: () => set({ isOpen: false }),
+  closeMenu: () => set({ isOpen: false, type: null, targetId: null }),
 }));

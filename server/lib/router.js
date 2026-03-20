@@ -8,6 +8,9 @@ import * as taskHandler from "../handlers/task-handler.js";
 import * as gitHandler from "../handlers/git-handler.js";
 import { buildAssistantBlocks, buildPermissionBlocks } from "./chat-blocks.js";
 import { resolveInsideWorkspace } from "./workspace-utils.js";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("API");
 
 export async function handleApiRequest(request, response, context) {
     const { stateStore, runtimeAdapter, config } = context;
@@ -18,7 +21,7 @@ export async function handleApiRequest(request, response, context) {
     const method = request.method;
     const query = url.searchParams;
 
-    console.log(`[API] Refactored Router: ${method} ${path}`);
+    log.debug(`${method} ${path}`);
 
     // Bootstrap
     if (method === "GET" && path === "/api/bootstrap") {

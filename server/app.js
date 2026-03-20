@@ -8,8 +8,13 @@ import { RuntimeAdapter } from "./lib/runtime-adapter.js";
 import { handleApiRequest } from "./lib/router.js";
 import { serveStatic, serveWorkspacePreview } from "./preview/static-server.js";
 import { json } from "./lib/http-utils.js";
+import { createLogger } from "./lib/logger.js";
 import { enforceLoopbackOnly } from "./security/loopback-guard.js";
 import { createSessionAuthManager, maskToken } from "./security/session-auth.js";
+
+const appLog = createLogger("App");
+const webUiLog = createLogger("WebUI");
+const previewLog = createLogger("Preview");
 
 function buildPreviewOrigin(request, config) {
     const incomingHost = String(request.headers.host || "").trim();
@@ -83,7 +88,7 @@ async function resolveRuntimePorts(config) {
 
         if (mainAvailable && previewAvailable) {
             if (port !== config.server.port || previewPort !== config.server.previewPort) {
-                console.warn(
+                appLog.warn(
                     `Configured ports ${config.server.port}/${config.server.previewPort} are unavailable, using ${port}/${previewPort} instead`
                 );
                 config.server.port = port;
@@ -101,7 +106,6 @@ function startServer(server, host, port, label) {
         server.once("error", reject);
         server.listen(port, host, () => {
             server.off("error", reject);
-            console.log(`${label} listening on http://${host}:${port}`);
             resolve();
         });
     });
@@ -172,10 +176,7 @@ export function createTeletonCodeApp(repoRoot = process.cwd()) {
 
             serveStatic(request, response, context.frontendRoot);
         } catch (error) {
-            console.error(
-                `[SERVER ERROR] ${error instanceof Error ? error.message : String(error)}`,
-                error instanceof Error ? error.stack : undefined
-            );
+            appLog.error(error instanceof Error ? error : new Error(String(error)));
             json(response, 500, {
                 success: false,
                 error: error instanceof Error ? error.message : String(error)
@@ -220,10 +221,7 @@ export function createTeletonCodeApp(repoRoot = process.cwd()) {
                 isolated: true
             });
         } catch (error) {
-            console.error(
-                `[PREVIEW SERVER ERROR] ${error instanceof Error ? error.message : String(error)}`,
-                error instanceof Error ? error.stack : undefined
-            );
+            previewLog.error(error instanceof Error ? error : new Error(String(error)));
             json(response, 500, {
                 success: false,
                 error: error instanceof Error ? error.message : String(error)
@@ -247,6 +245,7 @@ export async function startTeletonCodeServer(repoRoot = process.cwd()) {
     await resolveRuntimePorts(app.config);
 
     await startServer(app.server, app.config.server.host, app.config.server.port, "Teleton Code service");
+    appLog.info(`IDE server running on ${buildServiceOrigin(app.config)}`);
 
     try {
         await startServer(
@@ -255,6 +254,7 @@ export async function startTeletonCodeServer(repoRoot = process.cwd()) {
             app.config.server.previewPort,
             "Teleton Code preview service"
         );
+        previewLog.info(`Preview server running on ${buildPreviewServiceOrigin(app.config)}`);
     } catch (error) {
         await new Promise((resolve) => app.server.close(() => resolve()));
         throw error;
@@ -263,10 +263,10 @@ export async function startTeletonCodeServer(repoRoot = process.cwd()) {
     const serviceOrigin = buildServiceOrigin(app.config);
     persistRuntimeInfo(repoRoot, app.config, app.auth);
     if (app.config.security?.ownerOnly) {
-        console.log(`Teleton Code URL: ${serviceOrigin}/auth/exchange?token=${app.auth.getToken()}`);
-        console.log(`Teleton Code token: ${maskToken(app.auth.getToken())}`);
+        webUiLog.info(`URL: ${serviceOrigin}/auth/exchange?token=${app.auth.getToken()}`);
+        webUiLog.info(`Token: ${maskToken(app.auth.getToken())} (use Bearer header for API access)`);
     } else {
-        console.log(`Teleton Code URL: ${serviceOrigin}/`);
+        webUiLog.info(`URL: ${serviceOrigin}/`);
     }
 
     return app;

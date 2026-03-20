@@ -72,7 +72,7 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: 'teleton-layout-storage',
-      version: 3,
+      version: 4,
       partialize: (state) => ({
         sidebarOpen: state.sidebarOpen,
         activeModal: null,
@@ -85,12 +85,12 @@ export const useLayoutStore = create<LayoutState>()(
         previewBaseUrl: null,
         previewMaximized: state.previewMaximized,
       }),
-      migrate: (persistedState: any) => ({
+      migrate: (persistedState: any, version) => ({
         sidebarOpen: persistedState?.sidebarOpen ?? true,
         activeModal: null,
         toast: null,
-        language: persistedState?.language === 'ru' ? 'ru' : 'en',
-        fullAccess: Boolean(persistedState?.fullAccess),
+        language: version >= 4 && persistedState?.language === 'ru' ? 'ru' : 'en',
+        fullAccess: version >= 4 ? Boolean(persistedState?.fullAccess) : false,
         theme: persistedState?.theme === 'light' ? 'light' : 'dark',
         previewCode: null,
         previewUrl: null,

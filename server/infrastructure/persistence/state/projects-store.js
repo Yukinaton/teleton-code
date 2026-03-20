@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { buildDefaultWorkspace, buildWorkspacePath } from "../../../config/service-config.js";
+import { buildWorkspacePath } from "../../../config/service-config.js";
 import { nowIso } from "./state-helpers.js";
 
 function allocateWorkspacePath(config, requestedPath) {
@@ -43,26 +43,13 @@ function isManagedWorkspacePath(config, workspacePath) {
 }
 
 export function defaultState(config) {
-    const workspace = buildDefaultWorkspace(config);
-    const sessionId = randomUUID();
     return {
-        workspaces: [workspace],
-        sessions: [
-            {
-                id: sessionId,
-                workspaceId: workspace.id,
-                title: "Code Session",
-                status: "idle",
-                createdAt: nowIso(),
-                updatedAt: nowIso()
-            }
-        ],
-        messages: {
-            [sessionId]: []
-        },
+        workspaces: [],
+        sessions: [],
+        messages: {},
         tasks: [],
-        activeWorkspaceId: workspace.id,
-        activeSessionId: sessionId
+        activeWorkspaceId: null,
+        activeSessionId: null
     };
 }
 

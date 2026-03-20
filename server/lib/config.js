@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, basename, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { ensureCodeAgentWorkspace } from "./code-agent-workspace.js";
@@ -318,19 +318,4 @@ export function slugifyWorkspaceName(name) {
 
 export function buildWorkspacePath(config, name) {
     return join(config.runtime.workspaceBaseRoot, slugifyWorkspaceName(name));
-}
-
-export function buildDefaultWorkspace(config) {
-    const workspaceRoot = buildWorkspacePath(config, "project-sandbox");
-    mkdirSync(workspaceRoot, { recursive: true });
-    return {
-        id: "workspace-project-sandbox",
-        name: basename(workspaceRoot) || "project-sandbox",
-        path: workspaceRoot,
-        kind: "project",
-        icon: "folder",
-        archived: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-    };
 }

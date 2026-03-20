@@ -6,7 +6,7 @@ import { FileNode } from './FileNode';
 import { Archive, File, FileTerminal, FileCode, CodeXml, Palette, FileJson, FileText, Image, Music, Video } from 'lucide-react';
 import { useI18n } from '../../shared/i18n/useI18n';
 
-const FILE_TREE_GRID = "grid-cols-[minmax(340px,1fr)_96px_140px_72px]";
+const FILE_TREE_GRID = "grid-cols-[minmax(220px,1fr)_72px_112px_64px]";
 
 interface FileTreeProps {
   files: any[];
@@ -219,7 +219,7 @@ export function FileTree({ files, isLoading, onOpenFile, onSetModal, theme }: Fi
         </div>
         <div 
           className={cn(
-            "overflow-x-auto overflow-y-auto flex-1 font-mono pb-2 relative transition-all min-h-0",
+            "overflow-x-hidden overflow-y-auto flex-1 font-mono pb-2 relative transition-all min-h-0",
             dropTargetPath === "" && draggingPath !== null && "bg-primary-500/[0.04] border-2 border-dashed border-primary-500/40"
           )}
           onDragOver={(e) => {
@@ -236,7 +236,7 @@ export function FileTree({ files, isLoading, onOpenFile, onSetModal, theme }: Fi
         >
           <div 
             ref={treeInnerRef}
-            className={cn("flex flex-col min-w-max pb-32", draggingPath && "drag-active")}
+            className={cn("flex flex-col min-w-full pb-32", draggingPath && "drag-active")}
           >
             {isLoading ? (
               <div className="p-4 text-center text-gray-500 italic opacity-50">{t('fileTree.loading')}</div>

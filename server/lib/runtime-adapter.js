@@ -41,12 +41,16 @@ function detectTeletonWebSearchConfig(configPath) {
 
 async function importTeletonModuleCandidates(candidates, validator) {
     for (const candidate of candidates) {
-        const module = await import(pathToFileURL(candidate).href);
-        if (validator(module)) {
-            return {
-                path: candidate,
-                module
-            };
+        try {
+            const module = await import(pathToFileURL(candidate).href);
+            if (validator(module)) {
+                return {
+                    path: candidate,
+                    module
+                };
+            }
+        } catch (_error) {
+            // Ignore unrelated chunks while scanning Teleton's dist output.
         }
     }
 
@@ -78,12 +82,7 @@ async function resolveTeletonModules(pkgRoot) {
     }
 
     const runtimeCandidates = distFiles
-        .filter(
-            (name) =>
-                name !== "index.js" &&
-                !/^memory-.*\.js$/i.test(name) &&
-                !/^client-.*\.js$/i.test(name)
-        )
+        .filter((name) => !/^memory-.*\.js$/i.test(name) && !/^client-.*\.js$/i.test(name))
         .map((name) => join(distRoot, name));
     const runtimeMatch = await importTeletonModuleCandidates(
         runtimeCandidates,

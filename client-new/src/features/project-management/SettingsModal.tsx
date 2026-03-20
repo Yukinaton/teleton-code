@@ -18,6 +18,7 @@ import { cn } from '../../shared/utils/cn';
 import { FileTree } from '../../widgets/file-explorer/FileTree';
 import { CodeEditor } from '../../entities/editor/components/CodeEditor';
 import { useI18n } from '../../shared/i18n/useI18n';
+import { repairMojibake } from '../../shared/utils/text';
 
 type Tab = 'workspace' | 'ide' | 'agent' | 'archive';
 const PROJECTS_ROOT_WORKSPACE_ID = '__projects_root__';
@@ -153,7 +154,7 @@ export function SettingsModal() {
       ? 'Чтобы включить веб-поиск, настройте Tavily API key в Teleton Agent.'
       : 'To enable web search, configure a Tavily API key in Teleton Agent.';
 
-  const handleWebSearchToggleAttempt = () => {
+  const _handleWebSearchToggleAttempt = () => {
     if (webSearchEnabled) {
       showToast(
         language === 'ru'
@@ -166,6 +167,34 @@ export function SettingsModal() {
     showToast(
       language === 'ru'
         ? 'Сначала включите веб-поиск в настройках Teleton Agent.'
+        : 'Enable web search in Teleton Agent settings first.'
+    );
+  };
+
+  const displayWebSearchStatusText = language === 'ru'
+    ? repairMojibake(webSearchStatusText)
+    : webSearchStatusText;
+  const displayWebSearchHelperText = webSearchEnabled
+    ? ''
+    : (language === 'ru'
+        ? repairMojibake('Чтобы включить веб-поиск, настройте Tavily API key в Teleton Agent.')
+        : webSearchHelperText);
+
+  const handleResolvedWebSearchToggleAttempt = () => {
+    void _handleWebSearchToggleAttempt;
+
+    if (webSearchEnabled) {
+      showToast(
+        language === 'ru'
+          ? repairMojibake('Веб-поиск управляется настройками Teleton Agent.')
+          : 'Web search is managed by Teleton Agent settings.'
+      );
+      return;
+    }
+
+    showToast(
+      language === 'ru'
+        ? repairMojibake('Сначала включите веб-поиск в настройках Teleton Agent.')
         : 'Enable web search in Teleton Agent settings first.'
     );
   };
@@ -304,13 +333,13 @@ export function SettingsModal() {
                         <div>
                           <div className="font-bold text-gray-900 dark:text-white text-sm">{t('settings.webSearch')}</div>
                           <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          {webSearchStatusText}
+                          {displayWebSearchStatusText}
                           </div>
                         </div>
                     </div>
                     <label
                       className="relative inline-flex items-center cursor-pointer shrink-0"
-                      onClick={handleWebSearchToggleAttempt}
+                      onClick={handleResolvedWebSearchToggleAttempt}
                     >
                       <input
                         type="checkbox"
@@ -321,9 +350,11 @@ export function SettingsModal() {
                       <div className="w-10 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-graphite-hover peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary-500"></div>
                     </label>
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
-                    {webSearchHelperText}
-                  </p>
+                  {displayWebSearchHelperText ? (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                      {displayWebSearchHelperText}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             )}

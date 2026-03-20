@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { defaultState as buildDefaultState } from "./projects-store.js";
@@ -58,16 +58,6 @@ function dedupeWorkspaceIds(state) {
     });
 }
 
-function ensureProjectWorkspace(state, config) {
-    const hasProjectWorkspace = state.workspaces.some(
-        (workspace) => workspace.kind === "project" && !workspace.archived
-    );
-
-    if (!hasProjectWorkspace) {
-        state.workspaces.push(buildDefaultState(config).workspaces[0]);
-    }
-}
-
 function ensureActiveSelection(state, fallback) {
     const activeWorkspace = state.workspaces.find(
         (workspace) => workspace.id === state.activeWorkspaceId && !workspace.archived
@@ -86,6 +76,61 @@ function ensureActiveSelection(state, fallback) {
 
     if (!activeSessions.some((session) => session.id === state.activeSessionId)) {
         state.activeSessionId = activeSessions[0]?.id || null;
+    }
+}
+
+function isLegacyBootstrapSandbox(workspace) {
+    return (
+        workspace &&
+        workspace.kind === "project" &&
+        workspace.id === "workspace-project-sandbox" &&
+        workspace.name === "project-sandbox"
+    );
+}
+
+function isEmptyBootstrapFolder(workspacePath) {
+    if (!workspacePath || !existsSync(workspacePath)) {
+        return true;
+    }
+
+    const entries = readdirSync(workspacePath).filter(
+        (entry) => entry !== ".teleton-workspace" && entry !== ".DS_Store" && entry !== "Thumbs.db"
+    );
+
+    return entries.length === 0;
+}
+
+function pruneLegacyBootstrapSandbox(state) {
+    const activeProjects = state.workspaces.filter(
+        (workspace) => workspace.kind === "project" && !workspace.archived
+    );
+
+    if (activeProjects.length !== 1) {
+        return;
+    }
+
+    const [workspace] = activeProjects;
+    if (!isLegacyBootstrapSandbox(workspace)) {
+        return;
+    }
+
+    const sessions = state.sessions.filter((session) => session.workspaceId === workspace.id);
+    const hasMessages = sessions.some((session) => (state.messages[session.id] || []).length > 0);
+    const hasTasks = (state.tasks || []).some((task) => sessions.some((session) => session.id === task.sessionId));
+
+    if (hasMessages || hasTasks || !isEmptyBootstrapFolder(workspace.path)) {
+        return;
+    }
+
+    state.workspaces = state.workspaces.filter((item) => item.id !== workspace.id);
+    state.sessions = state.sessions.filter((session) => session.workspaceId !== workspace.id);
+
+    for (const session of sessions) {
+        delete state.messages[session.id];
+    }
+
+    if (existsSync(workspace.path)) {
+        rmSync(workspace.path, { recursive: true, force: true });
     }
 }
 
@@ -175,7 +220,7 @@ export function loadStateSnapshot(path, config) {
 
     normalizeWorkspaceKinds(state, config);
     dedupeWorkspaceIds(state);
-    ensureProjectWorkspace(state, config);
+    pruneLegacyBootstrapSandbox(state);
     ensureActiveSelection(state, fallback);
     ensureWorkspaceSessions(state);
     recoverStaleRunningState(state);

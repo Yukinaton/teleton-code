@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import { X, Folder, Code, Database, Globe, Zap, Cpu, Terminal, Box, Layers, Wrench } from 'lucide-react';
 import { useLayoutStore } from '../../entities/layout/useLayoutStore';
-import { useCreateWorkspace, useUpdateWorkspace, useWorkspaces } from '../../entities/workspace/useWorkspaceQuery';
+import { useCreateWorkspace } from '../../entities/workspace/useWorkspaceQuery';
 import { cn } from '../../shared/utils/cn';
-import { useContextStore } from '../../entities/layout/useContextStore';
 import { useI18n } from '../../shared/i18n/useI18n';
 import { useChatStore } from '../../entities/chat/useChatStore';
 
@@ -22,8 +21,6 @@ const ICONS = [
 
 export function ProjectModal() {
   const { activeModal, closeModal, showToast } = useLayoutStore();
-  const { targetId } = useContextStore();
-  const { data: workspaces } = useWorkspaces();
   const { t } = useI18n();
   const { setActiveWorkspace, setActiveSession, fetchMessages } = useChatStore();
   
@@ -32,24 +29,16 @@ export function ProjectModal() {
   const [validationError, setValidationError] = useState('');
   
   const createMutation = useCreateWorkspace();
-  const updateMutation = useUpdateWorkspace();
   
   const isVisible = activeModal === 'modal-new-project';
-  const editingWorkspace = targetId ? workspaces?.find(w => w.id === targetId) : null;
-  const isEdit = !!editingWorkspace;
 
   useEffect(() => {
     if (isVisible) {
-      if (isEdit && editingWorkspace) {
-        setName(editingWorkspace.name);
-        setSelectedIcon(editingWorkspace.icon || 'folder');
-      } else {
-        setName('');
-        setSelectedIcon('folder');
-        setValidationError('');
-      }
+      setName('');
+      setSelectedIcon('folder');
+      setValidationError('');
     }
-  }, [isVisible, isEdit, editingWorkspace]);
+  }, [isVisible]);
 
   if (!isVisible) return null;
 
@@ -64,25 +53,20 @@ export function ProjectModal() {
     if (!name.trim() || validationError) return;
     
     try {
-      if (isEdit && editingWorkspace) {
-        await updateMutation.mutateAsync({ id: editingWorkspace.id, name, icon: selectedIcon });
-        showToast(t('projectModal.updated'));
-      } else {
-        const payload = await createMutation.mutateAsync({ name, icon: selectedIcon });
-        const nextWorkspaceId = payload?.data?.activeWorkspaceId;
-        const nextSessionId = payload?.data?.activeSessionId;
+      const payload = await createMutation.mutateAsync({ name, icon: selectedIcon });
+      const nextWorkspaceId = payload?.data?.activeWorkspaceId;
+      const nextSessionId = payload?.data?.activeSessionId;
 
-        if (nextWorkspaceId) {
-          setActiveWorkspace(nextWorkspaceId);
-        }
-
-        if (nextSessionId) {
-          setActiveSession(nextSessionId);
-          void fetchMessages(nextSessionId);
-        }
-
-        showToast(t('projectModal.created'));
+      if (nextWorkspaceId) {
+        setActiveWorkspace(nextWorkspaceId);
       }
+
+      if (nextSessionId) {
+        setActiveSession(nextSessionId);
+        void fetchMessages(nextSessionId);
+      }
+
+      showToast(t('projectModal.created'));
       closeModal();
     } catch (_e) {
       showToast(t('projectModal.error'));
@@ -93,7 +77,7 @@ export function ProjectModal() {
     <div className="fixed inset-0 bg-gray-900/40 dark:bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center fade-in">
       <div className="bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border w-full max-w-md rounded-2xl shadow-2xl p-6 transform transition-all pop-in">
         <div className="flex justify-between items-center mb-6">
-          <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">{isEdit ? t('projectModal.editTitle') : t('projectModal.createTitle')}</h3>
+          <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">{t('projectModal.createTitle')}</h3>
           <button onClick={closeModal} className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors p-1 rounded-md">
             <X className="w-5 h-5" />
           </button>
@@ -145,10 +129,10 @@ export function ProjectModal() {
           </button>
           <button 
             onClick={handleSubmit}
-            disabled={!name.trim() || !!validationError || createMutation.isPending || updateMutation.isPending}
+            disabled={!name.trim() || !!validationError || createMutation.isPending}
             className="flex-1 py-3 text-xs font-bold text-white bg-primary-600 hover:bg-primary-700 rounded-xl transition-all shadow-md shadow-primary-500/20 active:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {createMutation.isPending || updateMutation.isPending ? t('projectModal.saving') : (isEdit ? t('common.save') : t('common.create'))}
+            {createMutation.isPending ? t('projectModal.saving') : t('common.create')}
           </button>
         </div>
       </div>
