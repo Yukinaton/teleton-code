@@ -33,7 +33,6 @@
     "cli/**/*.js",
     "docs/assets/**/*.svg",
     "docs/**/*.md",
-    "scripts/**/*.mjs",
     "scripts/start-service.cmd",
     "server/**/*.js",
     "server/public/**/*",

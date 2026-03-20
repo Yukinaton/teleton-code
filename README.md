@@ -46,23 +46,21 @@ Teleton Code adds the developer-facing IDE experience around it:
 
 ### 1. Installation
 
-**npm (target public install):**
+**npm (recommended):**
 
 ```bash
 npm install -g teleton-code@latest
 ```
 
-**Current repository install:**
+**From source (development):**
 
 ```bash
-git clone <your-repo-url>
-cd Pure-IDE
+git clone https://github.com/Yukinaton/teleton-code.git
+cd teleton-code
 npm install
 npm --prefix client-new install
 npm run build
 ```
-
-Until the first npm publish, use the repository install flow above.
 
 ### 2. Start
 
@@ -254,11 +252,11 @@ Planned later:
 
 ## Status
 
-- **Current release**: local companion IDE for Teleton Agent
-- **Publication goal**: clean npm package + public repo frontpage + next-stage deployment story
+- **Current release**: `teleton-code@0.1.0`
+- **Install path**: `npm install -g teleton-code@latest`
 - **Not a standalone agent**: Teleton Agent remains the base platform
 
 ## Support
 
 - **Teleton Agent repo**: [TONresistor/teleton-agent](https://github.com/TONresistor/teleton-agent)
-- **This project**: companion IDE repository and local release track
+- **This project**: companion IDE repository and npm package
