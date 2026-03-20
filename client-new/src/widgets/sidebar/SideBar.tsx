@@ -28,7 +28,7 @@ export function SideBar({ isOpen, onToggle }: SideBarProps) {
   const { data: workspaces } = useWorkspaces();
   const { openModal } = useLayoutStore();
   const { t } = useI18n();
-  const { openMenu, isOpen: isMenuOpen, targetId: menuTargetId, closeMenu } = useContextStore();
+  const { openMenu, isOpen: isMenuOpen, targetId: menuTargetId, closeMenu, clearTarget } = useContextStore();
   const { activeWorkspaceId: activeProj, activeSessionId: activeChat, selectSession, setActiveWorkspace: setActiveProj } = useChatStore();
   const [expandedProjs, setExpandedProjs] = useState<Set<string>>(new Set());
 
@@ -97,7 +97,10 @@ export function SideBar({ isOpen, onToggle }: SideBarProps) {
 
       <div className="p-3 flex-none space-y-3 overflow-hidden">
         <button 
-          onClick={() => openModal('modal-new-project')}
+          onClick={() => {
+            clearTarget();
+            openModal('modal-new-project');
+          }}
           className="sidebar-btn h-[2.75rem] w-full text-white px-3 rounded-lg transition-all shadow-sm hover:shadow-md flex items-center gap-3 active:scale-[0.98] overflow-hidden justify-start hover:brightness-110"
           style={{ backgroundColor: '#2563eb' }}
         >

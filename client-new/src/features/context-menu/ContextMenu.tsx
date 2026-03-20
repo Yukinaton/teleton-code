@@ -79,14 +79,14 @@ export function ContextMenu() {
           </button>
           <div className="h-px bg-gray-100 dark:bg-graphite-border my-1" />
           <button 
-            onClick={() => { openModal('modal-edit-project'); closeMenu(); }}
+            onClick={() => { openModal('modal-edit-project'); closeMenu({ preserveTarget: true }); }}
             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-graphite-hover rounded-lg transition-colors"
           >
             <Edit2 className="w-4 h-4 text-gray-400" />
             <span>{t('contextMenu.edit')}</span>
           </button>
           <button 
-            onClick={() => { openModal('modal-archive-project'); closeMenu(); }}
+            onClick={() => { openModal('modal-archive-project'); closeMenu({ preserveTarget: true }); }}
             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-graphite-hover rounded-lg transition-colors"
           >
             <Archive className="w-4 h-4 text-gray-400" />
@@ -94,7 +94,7 @@ export function ContextMenu() {
           </button>
           <div className="h-px bg-gray-100 dark:bg-graphite-border my-1" />
           <button 
-            onClick={() => { openModal('modal-delete-project'); closeMenu(); }}
+            onClick={() => { openModal('modal-delete-project'); closeMenu({ preserveTarget: true }); }}
             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-lg transition-colors"
           >
             <Trash2 className="w-4 h-4" />
@@ -106,14 +106,14 @@ export function ContextMenu() {
       {type === 'chat' && (
         <>
           <button 
-            onClick={() => { openModal('modal-rename-chat'); closeMenu(); }}
+            onClick={() => { openModal('modal-rename-chat'); closeMenu({ preserveTarget: true }); }}
             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-graphite-hover rounded-lg transition-colors"
           >
             <Edit2 className="w-4 h-4 text-gray-400" />
             <span>{t('contextMenu.renameChat')}</span>
           </button>
           <button 
-            onClick={() => { openModal('modal-delete-chat'); closeMenu(); }}
+            onClick={() => { openModal('modal-delete-chat'); closeMenu({ preserveTarget: true }); }}
             className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-lg transition-colors"
           >
             <Trash2 className="w-4 h-4" />

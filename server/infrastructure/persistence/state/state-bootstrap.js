@@ -83,8 +83,8 @@ function isLegacyBootstrapSandbox(workspace) {
     return (
         workspace &&
         workspace.kind === "project" &&
-        workspace.id === "workspace-project-sandbox" &&
-        workspace.name === "project-sandbox"
+        (workspace.name === "project-sandbox" ||
+            basename(resolve(workspace.path || "")) === "project-sandbox")
     );
 }
 
@@ -220,11 +220,11 @@ export function loadStateSnapshot(path, config) {
 
     normalizeWorkspaceKinds(state, config);
     dedupeWorkspaceIds(state);
+    syncWorkspaceFolders(state, config);
     pruneLegacyBootstrapSandbox(state);
     ensureActiveSelection(state, fallback);
     ensureWorkspaceSessions(state);
     recoverStaleRunningState(state);
-    syncWorkspaceFolders(state, config);
 
     writeFileSync(path, JSON.stringify(state, null, 2), "utf-8");
     return state;

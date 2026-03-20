@@ -16,6 +16,18 @@ const appLog = createLogger("App");
 const webUiLog = createLogger("WebUI");
 const previewLog = createLogger("Preview");
 
+function buildStartupBanner() {
+    return [
+        "┌──────────────────────────────────────────────────────────────────────────────┐",
+        "│                                                                              │",
+        "│  TELETON CODE                                                                │",
+        "│  Companion IDE for Teleton Agent                                             │",
+        "│  Local-first workflow • approvals • preview • Teleton-powered code agent    │",
+        "│                                                                              │",
+        "└──────────────────────────────────────────────────────────────────────────────┘"
+    ].join("\n");
+}
+
 function buildPreviewOrigin(request, config) {
     const incomingHost = String(request.headers.host || "").trim();
     const hostname = incomingHost.includes(":")
@@ -244,6 +256,10 @@ export async function startTeletonCodeServer(repoRoot = process.cwd()) {
     const app = createTeletonCodeApp(repoRoot);
     await resolveRuntimePorts(app.config);
 
+    if (process.stdout.isTTY) {
+        appLog.info(`\n${buildStartupBanner()}`);
+    }
+
     await startServer(app.server, app.config.server.host, app.config.server.port, "Teleton Code service");
     appLog.info(`IDE server running on ${buildServiceOrigin(app.config)}`);
 
@@ -263,9 +279,11 @@ export async function startTeletonCodeServer(repoRoot = process.cwd()) {
     const serviceOrigin = buildServiceOrigin(app.config);
     persistRuntimeInfo(repoRoot, app.config, app.auth);
     if (app.config.security?.ownerOnly) {
+        webUiLog.info("WebUI server running");
         webUiLog.info(`URL: ${serviceOrigin}/auth/exchange?token=${app.auth.getToken()}`);
         webUiLog.info(`Token: ${maskToken(app.auth.getToken())} (use Bearer header for API access)`);
     } else {
+        webUiLog.info("WebUI server running");
         webUiLog.info(`URL: ${serviceOrigin}/`);
     }
 

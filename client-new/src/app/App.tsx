@@ -38,7 +38,13 @@ function App() {
         const serverSessId = data.data.activeSessionId;
         const workspaces = Array.isArray(data.data.workspaces) ? data.data.workspaces : [];
         const sessionsByWorkspace = data.data.sessionsByWorkspace || {};
-        const previewBaseUrl = buildPreviewBaseUrl(data.data.runtime?.previewPort);
+        const runtime = data.data.runtime || {};
+        const previewBaseUrl = buildPreviewBaseUrl(runtime.previewPort);
+        const runtimeInstanceKey = JSON.stringify({
+          teletonRoot: runtime.teletonRoot || '',
+          packagePath: runtime.packagePath || '',
+          previewPort: runtime.previewPort || '',
+        });
 
         const persistedWorkspaceId = store.activeWorkspaceId;
         const persistedSessionId = store.activeSessionId;
@@ -71,7 +77,9 @@ function App() {
           store.setActiveWorkspace(targetWorkspaceId);
         }
 
-        useLayoutStore.getState().setPreviewBaseUrl(previewBaseUrl);
+        const layoutStore = useLayoutStore.getState();
+        layoutStore.syncRuntimeDefaults(runtimeInstanceKey);
+        layoutStore.setPreviewBaseUrl(previewBaseUrl);
 
         if (targetSessionId) {
           store.setActiveSession(targetSessionId);

@@ -1,12 +1,19 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+interface RuntimePreference {
+  language: 'ru' | 'en';
+  fullAccess: boolean;
+}
+
 interface LayoutState {
   sidebarOpen: boolean;
   activeModal: string | null;
   toast: { message: string; visible: boolean } | null;
   language: 'ru' | 'en';
   fullAccess: boolean;
+  instanceKey: string | null;
+  runtimePreferences: Record<string, RuntimePreference>;
   
   toggleSidebar: () => void;
   openModal: (id: string) => void;
@@ -14,6 +21,7 @@ interface LayoutState {
   showToast: (message: string) => void;
   setLanguage: (language: 'ru' | 'en') => void;
   setFullAccess: (fullAccess: boolean) => void;
+  syncRuntimeDefaults: (instanceKey: string) => void;
   theme: 'light' | 'dark';
   setTheme: (theme: 'light' | 'dark') => void;
   previewCode: string | null;
@@ -34,6 +42,8 @@ export const useLayoutStore = create<LayoutState>()(
       toast: null,
       language: 'en',
       fullAccess: false,
+      instanceKey: null,
+      runtimePreferences: {},
 
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       
@@ -49,11 +59,58 @@ export const useLayoutStore = create<LayoutState>()(
       },
 
       setLanguage: (language) => {
-        set({ language });
         document.documentElement.lang = language;
+        set((state) => ({
+          language,
+          runtimePreferences: state.instanceKey
+            ? {
+                ...state.runtimePreferences,
+                [state.instanceKey]: {
+                  language,
+                  fullAccess: state.fullAccess,
+                },
+              }
+            : state.runtimePreferences,
+        }));
       },
 
-      setFullAccess: (fullAccess) => set({ fullAccess }),
+      setFullAccess: (fullAccess) =>
+        set((state) => ({
+          fullAccess,
+          runtimePreferences: state.instanceKey
+            ? {
+                ...state.runtimePreferences,
+                [state.instanceKey]: {
+                  language: state.language,
+                  fullAccess,
+                },
+              }
+            : state.runtimePreferences,
+        })),
+
+      syncRuntimeDefaults: (instanceKey) => {
+        set((state) => {
+          const runtimePreference = state.runtimePreferences[instanceKey];
+          const language = runtimePreference?.language === 'ru' ? 'ru' : 'en';
+          const fullAccess = runtimePreference?.fullAccess === true;
+
+          document.documentElement.lang = language;
+
+          if (
+            state.instanceKey === instanceKey &&
+            state.language === language &&
+            state.fullAccess === fullAccess
+          ) {
+            return {};
+          }
+
+          return {
+            instanceKey,
+            language,
+            fullAccess,
+          };
+        });
+      },
       
       theme: 'dark',
       setTheme: (theme) => {
@@ -72,13 +129,15 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: 'teleton-layout-storage',
-      version: 4,
+      version: 6,
       partialize: (state) => ({
         sidebarOpen: state.sidebarOpen,
         activeModal: null,
         toast: null,
         language: state.language,
         fullAccess: state.fullAccess,
+        instanceKey: state.instanceKey,
+        runtimePreferences: state.runtimePreferences,
         theme: state.theme,
         previewCode: null,
         previewUrl: null,
@@ -89,9 +148,21 @@ export const useLayoutStore = create<LayoutState>()(
         sidebarOpen: persistedState?.sidebarOpen ?? true,
         activeModal: null,
         toast: null,
-        language: version >= 4 && persistedState?.language === 'ru' ? 'ru' : 'en',
-        fullAccess: version >= 4 ? Boolean(persistedState?.fullAccess) : false,
-        theme: persistedState?.theme === 'light' ? 'light' : 'dark',
+        language: 'en',
+        fullAccess: false,
+        instanceKey: typeof persistedState?.instanceKey === 'string' ? persistedState.instanceKey : null,
+        runtimePreferences:
+          version >= 6 && persistedState?.runtimePreferences && typeof persistedState.runtimePreferences === 'object'
+            ? persistedState.runtimePreferences
+            : typeof persistedState?.instanceKey === 'string'
+              ? {
+                  [persistedState.instanceKey]: {
+                    language: persistedState?.language === 'ru' ? 'ru' : 'en',
+                    fullAccess: Boolean(persistedState?.fullAccess),
+                  },
+                }
+              : {},
+        theme: persistedState?.theme === 'light' ? 'light' as const : 'dark' as const,
         previewCode: null,
         previewUrl: null,
         previewBaseUrl: null,
@@ -101,9 +172,7 @@ export const useLayoutStore = create<LayoutState>()(
         if (state?.theme) {
           document.documentElement.className = state.theme;
         }
-        if (state?.language) {
-          document.documentElement.lang = state.language;
-        }
+        document.documentElement.lang = 'en';
       }
     }
   )

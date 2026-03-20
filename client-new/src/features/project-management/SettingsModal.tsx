@@ -478,6 +478,14 @@ export function SettingsModal() {
                     if (modalType === 'delete') {
                       if (workspaceId && selectedPath) {
                         await deleteItemMutation.mutateAsync({ workspaceId, path: selectedPath });
+                        if (
+                          workspaceId === PROJECTS_ROOT_WORKSPACE_ID &&
+                          !selectedPath.includes('/')
+                        ) {
+                          const chatStore = useChatStore.getState();
+                          chatStore.setActiveSession(null);
+                          chatStore.setActiveWorkspace(null);
+                        }
                         setSelectedPath(null);
                       }
                     } else {

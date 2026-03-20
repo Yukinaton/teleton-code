@@ -8,7 +8,8 @@ interface ContextMenuState {
   targetId: string | null;
   
   openMenu: (x: number, y: number, type: 'project' | 'chat', targetId: string) => void;
-  closeMenu: () => void;
+  closeMenu: (options?: { preserveTarget?: boolean }) => void;
+  clearTarget: () => void;
 }
 
 export const useContextStore = create<ContextMenuState>((set) => ({
@@ -19,5 +20,11 @@ export const useContextStore = create<ContextMenuState>((set) => ({
   targetId: null,
 
   openMenu: (x, y, type, targetId) => set({ isOpen: true, x, y, type, targetId }),
-  closeMenu: () => set({ isOpen: false, type: null, targetId: null }),
+  closeMenu: (options) =>
+    set((state) => ({
+      isOpen: false,
+      type: options?.preserveTarget ? state.type : null,
+      targetId: options?.preserveTarget ? state.targetId : null,
+    })),
+  clearTarget: () => set({ type: null, targetId: null }),
 }));

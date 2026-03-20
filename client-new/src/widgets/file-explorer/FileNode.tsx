@@ -3,7 +3,7 @@ import { ChevronDown, Folder, Edit2, Trash2 } from 'lucide-react';
 import { cn } from '../../shared/utils/cn';
 import { formatDate, formatFileSize } from '../../shared/utils/format-utils';
 
-const FILE_TREE_GRID = "grid-cols-[minmax(220px,1fr)_72px_112px_64px]";
+const FILE_TREE_GRID = "grid-cols-[minmax(0,1fr)_64px_96px_56px]";
 
 interface FileNodeProps {
   meta: any;

@@ -6,7 +6,7 @@ import { FileNode } from './FileNode';
 import { Archive, File, FileTerminal, FileCode, CodeXml, Palette, FileJson, FileText, Image, Music, Video } from 'lucide-react';
 import { useI18n } from '../../shared/i18n/useI18n';
 
-const FILE_TREE_GRID = "grid-cols-[minmax(220px,1fr)_72px_112px_64px]";
+const FILE_TREE_GRID = "grid-cols-[minmax(0,1fr)_64px_96px_56px]";
 
 interface FileTreeProps {
   files: any[];
@@ -82,10 +82,6 @@ export function FileTree({ files, isLoading, onOpenFile, onSetModal, theme }: Fi
 
     const rect = targetEl.getBoundingClientRect();
     const clone = targetEl.cloneNode(true) as HTMLElement;
-    
-    if (treeInnerRef.current) {
-      treeInnerRef.current.style.minWidth = `${treeInnerRef.current.scrollWidth}px`;
-    }
 
     clone.style.width = `${rect.width}px`;
     clone.style.height = `${rect.height}px`;
@@ -118,9 +114,6 @@ export function FileTree({ files, isLoading, onOpenFile, onSetModal, theme }: Fi
   const handleDragEnd = useCallback(() => {
     setDraggingPath(null);
     setDropTargetPath(null);
-    if (treeInnerRef.current) {
-      treeInnerRef.current.style.minWidth = '';
-    }
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent, path: string) => {
@@ -236,7 +229,7 @@ export function FileTree({ files, isLoading, onOpenFile, onSetModal, theme }: Fi
         >
           <div 
             ref={treeInnerRef}
-            className={cn("flex flex-col min-w-full pb-32", draggingPath && "drag-active")}
+            className={cn("flex w-full min-w-0 flex-col pb-32", draggingPath && "drag-active")}
           >
             {isLoading ? (
               <div className="p-4 text-center text-gray-500 italic opacity-50">{t('fileTree.loading')}</div>

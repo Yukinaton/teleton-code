@@ -12,9 +12,10 @@ function printHelp() {
     console.log(`Teleton Code CLI
 
 Usage:
-  teleton-code start [--host 127.0.0.1] [--port 9999] [--preview-port 10000] [--open]
+  teleton-code start [--webui] [--host 127.0.0.1] [--port 9999] [--preview-port 10000] [--open]
 
 Options:
+  --webui                     Teleton-style alias for the local IDE WebUI
   --host <host>               Bind address for the IDE server
   --port <port>               Port for the IDE server
   --preview-port <port>       Port for the isolated preview server
@@ -83,6 +84,7 @@ async function startCommand(args) {
             host: { type: "string" },
             port: { type: "string" },
             "preview-port": { type: "string" },
+            webui: { type: "boolean" },
             open: { type: "boolean" },
             "no-open": { type: "boolean" },
             "teleton-home": { type: "string" },

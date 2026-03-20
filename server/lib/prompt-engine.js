@@ -1,13 +1,14 @@
-import { languageLabel, resolveTaskLanguage } from "./language.js";
+﻿import { languageLabel, resolveTaskLanguage } from "./language.js";
 import { buildCodeAgentProfile } from "./code-agent-profile.js";
 import { buildCodeAgentSoulText } from "./code-agent-workspace.js";
 
-export function isGeneralCapabilityQuestion(prompt) {
-    const source = String(prompt || "").toLowerCase();
-    return (
-        /(who are you|what (can|do) you (do|help with)|your capabilities|tell me about yourself|what's your purpose)/i.test(source) ||
-        /(\u043a\u0442\u043e\s+\u0442\u044b|\u0447\u0442\u043e\s+\u0442\u044b\s+\u0443\u043c\u0435\u0435\u0448\u044c|\u0447\u0435\u043c\s+\u043c\u043e\u0436\u0435\u0448\u044c\s+\u043f\u043e\u043c\u043e\u0447\u044c|\u0442\u0432\u043e\u0438\s+\u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438|\u0440\u0430\u0441\u0441\u043a\u0430\u0436\u0438\s+\u043e\s+\u0441\u0435\u0431\u0435)/i.test(source)
-    );
+function hasMeaningfulChangesSection(content) {
+    const changesMatch = String(content || "").match(/##\s+Changes([\s\S]*)/i);
+    if (!changesMatch) {
+        return false;
+    }
+
+    return /[A-Za-z0-9\u0400-\u04FF]/.test(changesMatch[1] || "");
 }
 
 export function isConsultationRequest(prompt) {
@@ -23,7 +24,7 @@ export function isConsultationRequest(prompt) {
 }
 
 export function isExecutionRequest(prompt) {
-    if (isGeneralCapabilityQuestion(prompt) || isConsultationRequest(prompt)) return false;
+    if (isConsultationRequest(prompt)) return false;
     
     const source = String(prompt || "").toLowerCase();
     // avoid matching "что ты сделал" (what did you do) as "сделать" (do/make)
@@ -51,7 +52,7 @@ export function extractRequestedFileNames(prompt) {
 }
 
 export function needsClarificationV2(prompt) {
-    if (isGeneralCapabilityQuestion(prompt) || isConsultationRequest(prompt)) return false;
+    if (isConsultationRequest(prompt)) return false;
 
     const source = String(prompt || "").toLowerCase();
     const requestedFiles = extractRequestedFileNames(prompt);
@@ -68,7 +69,7 @@ export function needsClarificationV2(prompt) {
 
     const hasIdentitySignals =
         /(name|ticker|logo|style|palette|color|links|copy|images|memes|react|vue|html|css|js|javascript|telegram|bot|widget|mini app|tma|title|subtitle|button|cta|placeholder|placeholders|landing|one-page|single page)/i.test(source) ||
-        /(\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435|\u0442\u0438\u043a\u0435\u0440|\u043b\u043e\u0433\u043e\u0442\u0438\u043f|\u0441\u0442\u0438\u043b\u044c|\u043f\u0430\u043b\u0438\u0442\u0440|\u0446\u0432\u0435\u0442|\u0441\u0441\u044b\u043b\u043a|\u0442\u0435\u043a\u0441\u0442|\u043a\u0430\u0440\u0442\u0438\u043d|\u043c\u0435\u043c\u044ы|\u0437\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a|\u043f\u043e\u0434\u043f\u0438\u0441\u044c|\u043a\u043d\u043e\u043f\u043a|\u0437\u0430\u0433\u043b\u0443\u0448\u043a|\u043e\u0434\u043d\u043e\u0441\u0442\u0440\u0430\u043d\u0438\u0447|\u043b\u0435\u043d\u0434\u0438\u043d\u0433)/i.test(source);
+        /(\u043d\u0430\u0437\u0432\u0430\u043d\u0438\u0435|\u0442\u0438\u043a\u0435\u0440|\u043b\u043e\u0433\u043e\u0442\u0438\u043f|\u0441\u0442\u0438\u043b\u044c|\u043f\u0430\u043b\u0438\u0442\u0440|\u0446\u0432\u0435\u0442|\u0441\u0441\u044b\u043b\u043a|\u0442\u0435\u043a\u0441\u0442|\u043a\u0430\u0440\u0442\u0438\u043d|\u043c\u0435\u043c\u044b|\u0437\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a|\u043f\u043e\u0434\u043f\u0438\u0441\u044c|\u043a\u043d\u043e\u043f\u043a|\u0437\u0430\u0433\u043b\u0443\u0448\u043a|\u043e\u0434\u043d\u043e\u0441\u0442\u0440\u0430\u043d\u0438\u0447|\u043b\u0435\u043d\u0434\u0438\u043d\u0433)/i.test(source);
     
     const hasExistingCodeSignals =
         /(\bbug\b|\berror\b|\bissue\b|\bfix\b|\brefactor\b|\bupdate existing\b|\bin this project\b|\bin this repo\b|\bin current repo\b|\bcurrent code\b|\bexisting\b|\bworkspace\b|\brepository\b|\bmodule\b|\bfunction\b|\bcomponent\b)/i.test(source) ||
@@ -85,7 +86,6 @@ export function needsClarificationV2(prompt) {
 
 export function shouldUseConsultationMode(prompt) {
     return (
-        isGeneralCapabilityQuestion(prompt) ||
         isConsultationRequest(prompt) ||
         needsClarificationV2(prompt)
     );
@@ -97,7 +97,7 @@ export function buildCodeSoul(config, _repoRoot, contextPolicy = {}) {
 
 export function shouldUseProjectActivityContext(prompt) {
     const source = String(prompt || "").toLowerCase();
-    if (isGeneralCapabilityQuestion(prompt) || isConsultationRequest(prompt) || needsClarificationV2(prompt)) {
+    if (isConsultationRequest(prompt) || needsClarificationV2(prompt)) {
         return false;
     }
 
@@ -150,16 +150,26 @@ ${sessionContext.summary}`);
 }
 
 export function shouldForceExecutionV2(prompt, response) {
-    if (isGeneralCapabilityQuestion(prompt) || isConsultationRequest(prompt)) return false;
+    if (isConsultationRequest(prompt)) return false;
     if (needsClarificationV2(prompt)) return false;
     if (!isExecutionRequest(prompt)) return false;
 
     const toolCalls = response.toolCalls || [];
-    const actionTools = new Set(["code_write_file", "code_write_file_lines", "code_replace_text", "code_patch_file", "code_make_dirs", "code_move_path", "code_delete_path", "code_run_command", "code_run_check_suite"]);
+    const actionTools = new Set([
+        "code_write_file",
+        "code_write_file_lines",
+        "code_replace_text",
+        "code_patch_file",
+        "code_make_dirs",
+        "code_move_path",
+        "code_delete_path",
+        "code_run_command",
+        "code_run_check_suite"
+    ]);
     const usedActionTool = toolCalls.some((tc) => actionTools.has(tc?.name));
 
     const content = String(response.content || "");
-    const hasMeaningfulChanges = /##\s+Changes[\s\S]*?[A-Za-zА-Яа-я0-9]/i.test(content);
+    const hasMeaningfulChanges = hasMeaningfulChangesSection(content);
     const hasBlockingReason = /(blocked|cannot|can't|need confirmation|missing|invalid api|authentication_error|не могу|нужно подтверждение|не хватает данных)/i.test(content);
     
     // Detect "promised action" in text
@@ -215,16 +225,15 @@ export function buildTaskPrompt(prompt, workspace, sessionContext = null, worksp
     const resolvedLanguage = resolveTaskLanguage(prompt, settings);
     const language = languageLabel(resolvedLanguage);
     const requestedFiles = extractRequestedFileNames(prompt);
-    const isCapabilityQuestion = isGeneralCapabilityQuestion(prompt);
     const isConsultation = isConsultationRequest(prompt);
     const clarificationRequired = needsClarificationV2(prompt);
     const codeAgentProfile = buildCodeAgentProfile(settings);
     const contextualNotes = buildContextSection(sessionContext, workspaceContext, {
         includeProjectMetadata: !clarificationRequired,
-        includeProjectMemory: !isCapabilityQuestion && !isConsultation && !clarificationRequired,
+        includeProjectMemory: !isConsultation && !clarificationRequired,
         includeRecentActivity: shouldUseProjectActivityContext(prompt)
     });
-    const includeWorkspaceRoot = !isCapabilityQuestion && !isConsultation && !clarificationRequired;
+    const includeWorkspaceRoot = !isConsultation && !clarificationRequired;
     const workspaceSection = [
         "Workspace:",
         `- name: ${workspace?.name || "unknown"}`,
@@ -234,9 +243,7 @@ export function buildTaskPrompt(prompt, workspace, sessionContext = null, worksp
     const explicitFileRule = requestedFiles.length >= 2 ? `The owner explicitly requested multiple files (${requestedFiles.join(", ")}). Create or update them as real artifacts.` : "";
     
     let clarificationRule = "";
-    if (isCapabilityQuestion) {
-        clarificationRule = "The owner is asking about your capabilities. Just answer truthfully based on your context and tools. DO NOT create any demo files or perform implementation tasks unless explicitly asked.";
-    } else if (isConsultation) {
+    if (isConsultation) {
         clarificationRule = "This is a consultation-only request. Answer directly with options, tradeoffs, or guidance. DO NOT modify files, DO NOT run execution tools, and DO NOT claim implementation work.";
     } else if (clarificationRequired) {
         clarificationRule = "The request is under-specified. Ask one short clarifying question. Do not inspect files, do not list the workspace, and do not mention internal paths unless the owner explicitly asked about existing code. If helpful, offer up to three concrete directions the owner can choose from.";

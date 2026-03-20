@@ -2,6 +2,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { FileNode, Workspace } from './types';
 
 const API_BASE = '/api';
+const PROJECTS_ROOT_WORKSPACE_ID = '__projects_root__';
+
+async function parseApiResponse(res: Response) {
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json?.success === false) {
+    throw new Error(json?.error || `Request failed with status ${res.status}`);
+  }
+  return json;
+}
 
 export function useWorkspaces() {
   return useQuery({
@@ -69,7 +78,7 @@ export function useSaveFile() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, content }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['file-content', variables.workspaceId, variables.path] });
@@ -100,7 +109,7 @@ export function useCreateWorkspace() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, icon }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
@@ -118,7 +127,7 @@ export function useUpdateWorkspace() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, icon }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
@@ -130,10 +139,12 @@ export function useDeleteWorkspace() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await fetch(`${API_BASE}/workspaces/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/workspaces/${id}`, { method: 'DELETE' });
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      queryClient.invalidateQueries({ queryKey: ['workspace-files', PROJECTS_ROOT_WORKSPACE_ID] });
     },
   });
 }
@@ -141,7 +152,8 @@ export function useArchiveWorkspace() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await fetch(`${API_BASE}/workspaces/${id}/archive`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/workspaces/${id}/archive`, { method: 'POST' });
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
@@ -154,7 +166,8 @@ export function useRestoreWorkspace() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await fetch(`${API_BASE}/workspaces/${id}/restore`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/workspaces/${id}/restore`, { method: 'POST' });
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
@@ -172,10 +185,13 @@ export function useCreateWorkspaceItem() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, path }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workspace-files', variables.workspaceId] });
+      if (variables.workspaceId === PROJECTS_ROOT_WORKSPACE_ID) {
+        queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      }
     },
   });
 }
@@ -187,10 +203,13 @@ export function useDeleteWorkspaceItem() {
       const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/items?path=${encodeURIComponent(path)}`, {
         method: 'DELETE',
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workspace-files', variables.workspaceId] });
+      if (variables.workspaceId === PROJECTS_ROOT_WORKSPACE_ID) {
+        queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      }
     },
   });
 }
@@ -204,10 +223,13 @@ export function useRenameWorkspaceItem() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ oldPath, newPath }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['workspace-files', variables.workspaceId] });
+      if (variables.workspaceId === PROJECTS_ROOT_WORKSPACE_ID) {
+        queryClient.invalidateQueries({ queryKey: ['workspaces'] });
+      }
     },
   });
 }
@@ -221,7 +243,7 @@ export function useCreateSession() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
@@ -233,7 +255,8 @@ export function useDeleteSession() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (sessionId: string) => {
-      await fetch(`${API_BASE}/sessions/${sessionId}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}`, { method: 'DELETE' });
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });
@@ -250,7 +273,7 @@ export function useUpdateSession() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
       });
-      return res.json();
+      return parseApiResponse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] });

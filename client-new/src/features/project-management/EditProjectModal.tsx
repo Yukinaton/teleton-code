@@ -21,7 +21,7 @@ const ICONS = [
 
 export function EditProjectModal() {
   const { activeModal, closeModal, showToast } = useLayoutStore();
-  const { targetId } = useContextStore();
+  const { targetId, clearTarget } = useContextStore();
   const { data: workspaces } = useWorkspaces();
   const { t } = useI18n();
   
@@ -41,12 +41,17 @@ export function EditProjectModal() {
 
   if (!isVisible) return null;
 
+  const handleClose = () => {
+    clearTarget();
+    closeModal();
+  };
+
   const handleSubmit = async () => {
     if (!name.trim() || !editingWorkspace) return;
     try {
       await updateMutation.mutateAsync({ id: editingWorkspace.id, name, icon: selectedIcon });
       showToast(t('editProject.saved'));
-      closeModal();
+      handleClose();
     } catch (_e) {
       showToast(t('editProject.error'));
     }
@@ -57,7 +62,7 @@ export function EditProjectModal() {
       <div className="bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border w-full max-w-md rounded-2xl shadow-2xl p-6 transform transition-all pop-in">
         <div className="flex justify-between items-center mb-6">
           <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">{t('projectModal.editTitle')}</h3>
-          <button onClick={closeModal} className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors p-1 rounded-md">
+          <button onClick={handleClose} className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors p-1 rounded-md">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -96,7 +101,7 @@ export function EditProjectModal() {
         </div>
         
         <div className="flex justify-center gap-3 mt-8">
-          <button onClick={closeModal} className="flex-1 py-3 text-xs font-bold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-graphite-hover rounded-xl hover:bg-gray-200 dark:hover:bg-gray-800 transition-all border border-transparent dark:border-graphite-border">
+          <button onClick={handleClose} className="flex-1 py-3 text-xs font-bold text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-graphite-hover rounded-xl hover:bg-gray-200 dark:hover:bg-gray-800 transition-all border border-transparent dark:border-graphite-border">
             {t('common.cancel')}
           </button>
           <button 

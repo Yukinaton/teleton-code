@@ -20,6 +20,7 @@ function logLine(level, message) {
 
 const logInfo = (message) => logLine("INFO", message);
 const logWarn = (message) => logLine("WARN", message);
+const logError = (message) => logLine("ERROR", message);
 
 function detectTeletonWebSearchConfig(configPath) {
     try {
@@ -81,19 +82,38 @@ async function resolveTeletonModules(pkgRoot) {
         throw new Error(`Teleton memory module was not found in ${distRoot}`);
     }
 
-    const runtimeCandidates = distFiles
+    const configCandidates = distFiles
         .filter((name) => !/^memory-.*\.js$/i.test(name) && !/^client-.*\.js$/i.test(name))
         .map((name) => join(distRoot, name));
-    const runtimeMatch = await importTeletonModuleCandidates(
-        runtimeCandidates,
-        (module) =>
-            typeof module.loadConfig === "function" &&
-            typeof module.AgentRuntime === "function"
+    const configMatch = await importTeletonModuleCandidates(
+        configCandidates,
+        (module) => typeof module.loadConfig === "function"
     );
 
-    if (!runtimeMatch) {
-        throw new Error(`Teleton runtime module was not found in ${distRoot}`);
+    if (!configMatch) {
+        throw new Error(`Teleton config module was not found in ${distRoot}`);
     }
+
+    const entryCandidates = [
+        join(distRoot, "index.js"),
+        ...distFiles
+            .filter((name) => name !== "index.js" && !/^memory-.*\.js$/i.test(name))
+            .map((name) => join(distRoot, name))
+    ];
+    const appEntryMatch = await importTeletonModuleCandidates(
+        entryCandidates,
+        (module) => typeof module.TeletonApp === "function"
+    );
+
+    if (!appEntryMatch) {
+        throw new Error(`Teleton app entrypoint was not found in ${distRoot}`);
+    }
+
+    const runtimeCandidates = configCandidates.filter((candidate) => candidate !== configMatch.path);
+    const runtimeMatch = await importTeletonModuleCandidates(
+        runtimeCandidates,
+        (module) => typeof module.AgentRuntime === "function"
+    );
 
     const clientCandidates = distFiles
         .filter((name) => /^client-.*\.js$/i.test(name))
@@ -108,9 +128,18 @@ async function resolveTeletonModules(pkgRoot) {
     }
 
     return {
-        runtimeModules: runtimeMatch.module,
+        appModules: appEntryMatch.module,
+        configModules: configMatch.module,
+        runtimeModules: runtimeMatch?.module || {},
         memoryModules: memoryMatch.module,
-        clientModules: clientMatch.module
+        clientModules: clientMatch.module,
+        resolvedPaths: {
+            app: appEntryMatch.path,
+            config: configMatch.path,
+            runtime: runtimeMatch?.path || "(derived from TeletonApp)",
+            memory: memoryMatch.path,
+            client: clientMatch.path
+        }
     };
 }
 
@@ -126,7 +155,10 @@ export class RuntimeAdapter {
         this.activeTaskCallbacks = new Map();
         this.requestTimestamps = [];
         this.seenSessionIds = new Set();
+        this.coreConfigSignature = null;
         this.runtimeConfigSignature = null;
+        this.coreLoadPromise = null;
+        this.fullLoadPromise = null;
         this.toolRegistry = this.createToolRegistry();
     }
 
@@ -188,71 +220,158 @@ export class RuntimeAdapter {
         return `${stats.mtimeMs}:${stats.size}:${readFileSync(configPath, "utf-8")}`;
     }
 
+    async ensureCoreLoaded() {
+        const signature = this.readTeletonConfigSignature();
+        if (this.modules && this.teletonConfig && this.coreConfigSignature === signature) {
+            return;
+        }
+
+        if (this.coreLoadPromise) {
+            return this.coreLoadPromise;
+        }
+
+        this.coreLoadPromise = (async () => {
+            logInfo("Initializing Teleton core runtime...");
+            process.env.TELETON_HOME = this.serviceConfig.runtime.teletonRoot;
+
+            if (this.coreConfigSignature !== signature) {
+                this.agent = null;
+                this.db = null;
+                this.memory = null;
+                this.runtimeConfigSignature = null;
+            }
+
+            const pkgRoot = this.serviceConfig.teleton.packagePath;
+            const { appModules, configModules, runtimeModules, memoryModules, clientModules, resolvedPaths } =
+                await resolveTeletonModules(pkgRoot);
+
+            logInfo(`Resolved Teleton modules from ${pkgRoot}`);
+            logInfo(`App entry: ${resolvedPaths.app}`);
+            logInfo(`Config module: ${resolvedPaths.config}`);
+            logInfo(`Runtime module: ${resolvedPaths.runtime}`);
+            logInfo(`Memory module: ${resolvedPaths.memory}`);
+            logInfo(`Client module: ${resolvedPaths.client}`);
+
+            this.modules = { ...appModules, ...configModules, ...runtimeModules, ...memoryModules, ...clientModules };
+            this.teletonConfig = configModules.loadConfig(this.serviceConfig.teleton.configPath);
+            const allowWebSearch = Boolean(this.teletonConfig?.tavily_api_key);
+            this.toolRegistry.setPolicy({
+                allowWebSearch
+            });
+            this.coreConfigSignature = signature;
+
+            logInfo(
+                `Teleton core ready (provider: ${this.teletonConfig?.agent?.provider || "unknown"}, model: ${this.teletonConfig?.agent?.model || "unknown"})`
+            );
+        })()
+            .catch((error) => {
+                logError(`Teleton core initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+                throw error;
+            })
+            .finally(() => {
+                this.coreLoadPromise = null;
+            });
+
+        return this.coreLoadPromise;
+    }
+
     async ensureLoaded() {
         const signature = this.readTeletonConfigSignature();
         if (this.agent && this.runtimeConfigSignature === signature) {
             return;
         }
 
-        logInfo("Initializing agent runtime...");
-        process.env.TELETON_HOME = this.serviceConfig.runtime.teletonRoot;
-
-        const pkgRoot = this.serviceConfig.teleton.packagePath;
-        const { runtimeModules, memoryModules, clientModules } = await resolveTeletonModules(pkgRoot);
-
-        this.modules = { ...runtimeModules, ...memoryModules, ...clientModules };
-        const config = runtimeModules.loadConfig(this.serviceConfig.teleton.configPath);
-        const embeddingProvider = config.embedding?.provider || "none";
-        const vectorEnabled = embeddingProvider !== "none";
-        const teletonMemoryPath = join(this.serviceConfig.runtime.teletonRoot, "memory.db");
-
-        this.memory = memoryModules.initializeMemory({
-            database: {
-                path: teletonMemoryPath,
-                enableVectorSearch: vectorEnabled,
-                vectorDimensions: 384
-            },
-            embeddings: {
-                provider: embeddingProvider,
-                model: config.embedding?.model,
-                apiKey: embeddingProvider === "anthropic" ? config.agent?.api_key : undefined
-            },
-            workspaceDir: this.serviceConfig.runtime.teletonRoot
-        });
-
-        this.db = memoryModules.getDatabase().getDb();
-        this.teletonConfig = config;
-        const allowWebSearch = Boolean(config?.tavily_api_key);
-        this.toolRegistry.setPolicy({
-            allowWebSearch
-        });
-        const baseCodeAgentProfile = buildCodeAgentProfile({
-            allowWebSearch
-        });
-
-        this.agent = new runtimeModules.AgentRuntime(
-            config,
-            buildCodeSoul(
-                this.serviceConfig,
-                process.cwd(),
-                baseCodeAgentProfile.contextPolicy
-            ),
-            this.toolRegistry
-        );
-
-        if (this.memory?.embedder && typeof this.agent.initializeContextBuilder === "function") {
-            this.agent.initializeContextBuilder(
-                this.memory.embedder,
-                typeof memoryModules.getDatabase().isVectorSearchReady === "function"
-                    ? memoryModules.getDatabase().isVectorSearchReady()
-                    : false
-            );
+        if (this.fullLoadPromise) {
+            return this.fullLoadPromise;
         }
 
-        this.runtimeConfigSignature = signature;
+        this.fullLoadPromise = (async () => {
+            await this.ensureCoreLoaded();
+
+            const runtimeModules = this.modules;
+            const memoryModules = this.modules;
+            const config = this.teletonConfig;
+            const embeddingProvider = config.embedding?.provider || "none";
+            const vectorEnabled = embeddingProvider !== "none";
+            const teletonMemoryPath = join(this.serviceConfig.runtime.teletonRoot, "memory.db");
+
+            logInfo(`Initializing code-agent memory (embeddings: ${embeddingProvider})...`);
+            this.memory = memoryModules.initializeMemory({
+                database: {
+                    path: teletonMemoryPath,
+                    enableVectorSearch: vectorEnabled,
+                    vectorDimensions: 384
+                },
+                embeddings: {
+                    provider: embeddingProvider,
+                    model: config.embedding?.model,
+                    apiKey: embeddingProvider === "anthropic" ? config.agent?.api_key : undefined
+                },
+                workspaceDir: this.serviceConfig.runtime.teletonRoot
+            });
+
+            this.db = memoryModules.getDatabase().getDb();
+            logInfo("Memory layer ready.");
+
+            const baseCodeAgentProfile = buildCodeAgentProfile({
+                allowWebSearch: Boolean(config?.tavily_api_key)
+            });
+
+            let AgentRuntimeCtor = runtimeModules.AgentRuntime;
+            if (typeof AgentRuntimeCtor !== "function") {
+                if (typeof this.modules.TeletonApp !== "function") {
+                    throw new Error("Teleton AgentRuntime export is missing and TeletonApp entrypoint is unavailable");
+                }
+
+                logInfo("Deriving AgentRuntime constructor from TeletonApp entrypoint...");
+                const tempApp = new this.modules.TeletonApp(this.serviceConfig.teleton.configPath);
+                AgentRuntimeCtor = tempApp?.agent?.constructor;
+
+                if (typeof AgentRuntimeCtor !== "function") {
+                    throw new Error("Failed to derive AgentRuntime constructor from TeletonApp");
+                }
+
+                this.modules.AgentRuntime = AgentRuntimeCtor;
+            }
+
+            logInfo("Creating Teleton code-agent runtime...");
+            this.agent = new AgentRuntimeCtor(
+                config,
+                buildCodeSoul(
+                    this.serviceConfig,
+                    process.cwd(),
+                    baseCodeAgentProfile.contextPolicy
+                ),
+                this.toolRegistry
+            );
+
+            if (this.memory?.embedder && typeof this.agent.initializeContextBuilder === "function") {
+                logInfo("Initializing context builder...");
+                this.agent.initializeContextBuilder(
+                    this.memory.embedder,
+                    typeof memoryModules.getDatabase().isVectorSearchReady === "function"
+                        ? memoryModules.getDatabase().isVectorSearchReady()
+                        : false
+                );
+            }
+
+            this.runtimeConfigSignature = signature;
+            logInfo("Agent runtime ready.");
+        })()
+            .catch((error) => {
+                logError(`Agent runtime initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+                throw error;
+            })
+            .finally(() => {
+                this.fullLoadPromise = null;
+            });
+
+        return this.fullLoadPromise;
     }
 
     async callStructuredChat(systemPrompt, userPrompt, options = {}) {
+        await this.ensureCoreLoaded();
+
         if (typeof this.modules?.chatWithContext !== "function") {
             throw new Error("Teleton chat client is not available for structured execution");
         }

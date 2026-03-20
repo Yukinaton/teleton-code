@@ -1,9 +1,21 @@
 import { json, badRequest, notFound } from "../lib/http-utils.js";
 import { listWorkspaceTree, resolveInsideWorkspace, readWorkspaceFile } from "../lib/workspace-utils.js";
 import { existsSync, mkdirSync, writeFileSync, rmSync, renameSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 const PROJECTS_ROOT_WORKSPACE_ID = "__projects_root__";
+
+function findWorkspaceByAbsolutePath(stateStore, absolutePath) {
+    const targetPath = resolve(absolutePath);
+    return [...stateStore.listWorkspaces(), ...stateStore.listArchivedWorkspaces()].find(
+        (workspace) => resolve(workspace.path) === targetPath
+    ) || null;
+}
+
+function isTopLevelProjectsRootPath(itemPath) {
+    const normalized = String(itemPath || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    return normalized.length > 0 && !normalized.includes("/");
+}
 
 function getRootPath(workspaceId, stateStore, config) {
     if (workspaceId === PROJECTS_ROOT_WORKSPACE_ID) {
@@ -71,6 +83,16 @@ export function handleCreateItem(workspaceId, stateStore, config, body, response
         const target = resolveInsideWorkspace(rootPath, itemPath);
         if (type === "folder") {
             mkdirSync(target.absolute, { recursive: true });
+            if (workspaceId === PROJECTS_ROOT_WORKSPACE_ID && isTopLevelProjectsRootPath(target.relativePath)) {
+                const existingWorkspace = findWorkspaceByAbsolutePath(stateStore, target.absolute);
+                if (!existingWorkspace) {
+                    stateStore.createWorkspace({
+                        name: basename(target.relativePath),
+                        path: target.absolute,
+                        icon: "folder"
+                    });
+                }
+            }
         } else {
             const parent = dirname(target.absolute);
             if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
@@ -91,6 +113,16 @@ export function handleDeleteItem(workspaceId, stateStore, config, body, query, r
 
     try {
         const target = resolveInsideWorkspace(rootPath, itemPath);
+        if (workspaceId === PROJECTS_ROOT_WORKSPACE_ID && isTopLevelProjectsRootPath(target.relativePath)) {
+            const workspace = findWorkspaceByAbsolutePath(stateStore, target.absolute);
+            if (workspace) {
+                if (existsSync(target.absolute)) {
+                    rmSync(target.absolute, { recursive: true, force: true });
+                }
+                stateStore.deleteWorkspace(workspace.id);
+                return json(response, 200, { success: true, data: { deletedWorkspaceId: workspace.id } });
+            }
+        }
         if (existsSync(target.absolute)) {
             rmSync(target.absolute, { recursive: true, force: true });
         }
@@ -114,6 +146,19 @@ export function handleRenameItem(workspaceId, stateStore, config, body, response
         if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
 
         renameSync(oldTarget.absolute, newTarget.absolute);
+        if (
+            workspaceId === PROJECTS_ROOT_WORKSPACE_ID &&
+            isTopLevelProjectsRootPath(oldTarget.relativePath) &&
+            isTopLevelProjectsRootPath(newTarget.relativePath)
+        ) {
+            const workspace = findWorkspaceByAbsolutePath(stateStore, oldTarget.absolute);
+            if (workspace) {
+                stateStore.updateWorkspace(workspace.id, {
+                    name: basename(newTarget.relativePath),
+                    path: newTarget.absolute
+                });
+            }
+        }
         json(response, 200, { success: true, data: { path: newTarget.relativePath } });
     } catch (e) {
         json(response, 500, { success: false, error: e.message });

@@ -3,7 +3,6 @@ import {
     buildTaskPrompt,
     extractRequestedFileNames,
     isConsultationRequest,
-    isGeneralCapabilityQuestion,
     needsClarificationV2,
     shouldForceExecutionV2,
     shouldUseConsultationMode
@@ -69,27 +68,17 @@ export async function processSessionPrompt({
 }) {
     const language = resolveTaskLanguage(prompt, settings);
     const languageName = languageLabel(language);
-    const consultationRequest = isConsultationRequest(prompt);
-    const clarificationRequired = needsClarificationV2(prompt);
-    const consultationMode = shouldUseConsultationMode(prompt);
-    await adapter.ensureLoaded();
-    const allowWebSearch = Boolean(adapter.teletonConfig?.tavily_api_key);
-    const codeAgentProfile = buildCodeAgentProfile({
-        ...settings,
-        allowWebSearch,
-        consultationOnly: consultationMode
-    });
-    adapter.ensureQuotaAvailable();
-
     const chatId = adapter.sessionChatId(sessionId);
     const workspace = adapter.resolveWorkspaceForChatId(chatId);
-    const sessionContext = adapter.stateStore.getSessionContext(sessionId);
-    const workspaceContext = workspace
-        ? adapter.stateStore.getWorkspaceContext(workspace.id, sessionId)
-        : null;
-    const isolatedSurface = codeAgentProfile.contextPolicy?.isolateFromTeletonMemory === true;
+    const clarificationHint = needsClarificationV2(prompt);
+    const consultationMode = shouldUseConsultationMode(prompt);
+    const intentMode = clarificationHint
+        ? "clarification"
+        : consultationMode
+          ? "consultation"
+          : "execution";
 
-    if (clarificationRequired) {
+    if (clarificationHint) {
         adapter.seenSessionIds.add(sessionId);
         return runClarificationFlow({
             callStructuredChat: adapter.callStructuredChat.bind(adapter),
@@ -98,6 +87,20 @@ export async function processSessionPrompt({
             workspace
         });
     }
+
+    adapter.ensureQuotaAvailable();
+    await adapter.ensureLoaded();
+    const allowWebSearch = Boolean(adapter.teletonConfig?.tavily_api_key);
+    const codeAgentProfile = buildCodeAgentProfile({
+        ...settings,
+        allowWebSearch,
+        consultationOnly: consultationMode
+    });
+    const sessionContext = adapter.stateStore.getSessionContext(sessionId);
+    const workspaceContext = workspace
+        ? adapter.stateStore.getWorkspaceContext(workspace.id, sessionId)
+        : null;
+    const isolatedSurface = codeAgentProfile.contextPolicy?.isolateFromTeletonMemory === true;
 
     let permissionBarrier = null;
     const executedToolCalls = [];
@@ -155,7 +158,13 @@ export async function processSessionPrompt({
         const response = await withTimeout(
             adapter.agent.processMessage({
                 chatId,
-                userMessage: buildTaskPrompt(prompt, workspace, sessionContext, workspaceContext, settings),
+                userMessage: buildTaskPrompt(
+                    prompt,
+                    workspace,
+                    sessionContext,
+                    workspaceContext,
+                    settings
+                ),
                 userName: "Owner",
                 isGroup: isolatedSurface,
                 toolContext: {
@@ -184,17 +193,16 @@ export async function processSessionPrompt({
 
         let result = response;
         let combinedToolCalls = executedToolCalls.length > 0 ? [...executedToolCalls] : [...initialToolCalls];
-        const isCapabilityQuestion = isGeneralCapabilityQuestion(prompt);
         const isHallucinating = shouldForceExecutionV2(prompt, result);
         const initialPermissionBarrier = permissionBarrier !== null;
         const validation =
-            !isCapabilityQuestion && workspace
+            intentMode === "execution" && workspace
                 ? initialPermissionBarrier
                     ? { problems: [] }
                     : await validateWrittenFiles(workspace, combinedToolCalls, adapter.serviceConfig)
                 : { problems: [] };
         const alignmentProblems =
-            !isCapabilityQuestion && workspace
+            intentMode === "execution" && workspace
                 ? initialPermissionBarrier
                     ? []
                     : await validatePromptAlignment(
@@ -242,7 +250,7 @@ export async function processSessionPrompt({
         }, {});
         const needsRepair =
             !initialPermissionBarrier &&
-            !isCapabilityQuestion &&
+            intentMode === "execution" &&
             (validation.problems.length > 0 ||
                 alignmentProblems.length > 0 ||
                 unsupportedToolCalls.length > 0 ||
@@ -260,7 +268,7 @@ export async function processSessionPrompt({
             let repairPrompt = "";
 
             if (unsupportedToolCalls.length > 0) {
-                repairPrompt = consultationRequest
+                repairPrompt = consultationMode
                     ? `You referenced unsupported tool names: ${unsupportedToolCalls.join(", ")}.
 This request is consultation-only. Do not call tools unless a small read-only inspection is truly necessary.
 Answer directly in ${languageName} and do not claim file creation or implementation.`
@@ -316,7 +324,7 @@ MISSING FILES: ${missing.join(", ") || "Action tools were not called"}
 You MUST implement them NOW using code_write_file. DO NOT research anymore. DO NOT explain. JUST WRITE THE CODE.
 Response must be in ${languageName}.`;
             } else if (genericOrEmptyResponse) {
-                repairPrompt = consultationRequest
+                repairPrompt = consultationMode
                     ? `Your previous answer was empty or generic.
 Reply directly to the owner in ${languageName} with a concrete consultation answer.
 Do not use vague fallback phrases like "please try again".`
@@ -366,11 +374,11 @@ If the task is incomplete, finish it first before answering.`;
         }
 
         const finalValidation =
-            !isCapabilityQuestion && workspace
+            intentMode === "execution" && workspace
                 ? await validateWrittenFiles(workspace, combinedToolCalls, adapter.serviceConfig)
                 : { problems: [] };
         const finalAlignmentProblems =
-            !isCapabilityQuestion && workspace
+            intentMode === "execution" && workspace
                 ? await validatePromptAlignment(
                       prompt,
                       workspace,
