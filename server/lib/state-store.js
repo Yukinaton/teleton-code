@@ -119,8 +119,8 @@ export class StateStore {
         return deleteWorkspaceRecord(this, workspaceId);
     }
 
-    createSession(workspaceId, title = "New chat") {
-        return createChatSession(this, workspaceId, title);
+    createSession(workspaceId, title = "New chat", options = {}) {
+        return createChatSession(this, workspaceId, title, options);
     }
 
     updateSession(sessionId, patch) {

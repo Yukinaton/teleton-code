@@ -5,9 +5,12 @@ import { CodeToolRegistry } from "./code-tool-registry.js";
 import { buildCodingTools } from "./coding-tools.js";
 import { buildCodeSoul } from "./prompt-engine.js";
 import { buildCodeAgentProfile } from "./code-agent-profile.js";
-import { runClarificationFlow as runClarificationFlowService } from "../application/agent/clarification-flow.js";
-import { runStructuredBuildFlowV2 as runStructuredBuildFlowV2Service } from "../application/agent/structured-build-flow.js";
-import { processSessionPrompt as processSessionPromptService } from "../application/agent/session-prompt-service.js";
+import {
+    buildCodeAgentRuntimeConfig,
+    clampStructuredChatOptions,
+    deriveRetryOutputTokenLimit
+} from "./code-agent-runtime-policy.js";
+import { processCodeTurn, resumeCodeTurn } from "../application/code-agent/index.js";
 
 function timestamp() {
     return new Date().toTimeString().slice(0, 8);
@@ -21,6 +24,61 @@ function logLine(level, message) {
 const logInfo = (message) => logLine("INFO", message);
 const logWarn = (message) => logLine("WARN", message);
 const logError = (message) => logLine("ERROR", message);
+
+function extractStructuredChatText(response) {
+    if (typeof response === "string") {
+        return response;
+    }
+
+    const directCandidates = [
+        response?.text,
+        response?.content,
+        response?.message,
+        response?.outputText,
+        response?.output
+    ];
+
+    for (const candidate of directCandidates) {
+        if (typeof candidate === "string" && candidate.trim()) {
+            return candidate;
+        }
+    }
+
+    const listCandidates = [response?.content, response?.parts, response?.messages, response?.output];
+    for (const list of listCandidates) {
+        if (!Array.isArray(list)) {
+            continue;
+        }
+
+        const pieces = list
+            .map((item) => {
+                if (typeof item === "string") {
+                    return item;
+                }
+
+                if (typeof item?.text === "string") {
+                    return item.text;
+                }
+
+                if (typeof item?.content === "string") {
+                    return item.content;
+                }
+
+                if (typeof item?.value === "string") {
+                    return item.value;
+                }
+
+                return "";
+            })
+            .filter(Boolean);
+
+        if (pieces.length > 0) {
+            return pieces.join("\n").trim();
+        }
+    }
+
+    return "";
+}
 
 function detectTeletonWebSearchConfig(configPath) {
     try {
@@ -152,6 +210,8 @@ export class RuntimeAdapter {
         this.db = null;
         this.memory = null;
         this.teletonConfig = null;
+        this.codeAgentRuntimeConfig = null;
+        this.codeAgentOutputLimit = null;
         this.activeTaskCallbacks = new Map();
         this.requestTimestamps = [];
         this.seenSessionIds = new Set();
@@ -192,6 +252,45 @@ export class RuntimeAdapter {
 
     clearTaskCallback(chatId) {
         this.activeTaskCallbacks.delete(chatId);
+    }
+
+    applyCodeAgentOutputLimit(limit) {
+        if (!limit) {
+            return;
+        }
+
+        this.codeAgentOutputLimit = limit;
+
+        if (this.codeAgentRuntimeConfig?.agent) {
+            this.codeAgentRuntimeConfig.agent.max_tokens = limit;
+        }
+
+        if (this.agent?.config?.agent) {
+            this.agent.config.agent.max_tokens = limit;
+        }
+    }
+
+    async processAgentMessageWithBudget(request, { retryLabel = "Agent execution" } = {}) {
+        try {
+            return await this.agent.processMessage(request);
+        } catch (error) {
+            const retryLimit = deriveRetryOutputTokenLimit(this.codeAgentOutputLimit, error);
+            if (!retryLimit || retryLimit >= this.codeAgentOutputLimit) {
+                throw error;
+            }
+
+            const previousLimit = this.codeAgentOutputLimit;
+            logWarn(
+                `${retryLabel} hit provider token budget. Retrying with lower output cap ${retryLimit} (was ${previousLimit}).`
+            );
+            this.applyCodeAgentOutputLimit(retryLimit);
+
+            try {
+                return await this.agent.processMessage(request);
+            } finally {
+                this.applyCodeAgentOutputLimit(previousLimit);
+            }
+        }
     }
 
     async notifyToolEvent(type, event) {
@@ -254,6 +353,9 @@ export class RuntimeAdapter {
 
             this.modules = { ...appModules, ...configModules, ...runtimeModules, ...memoryModules, ...clientModules };
             this.teletonConfig = configModules.loadConfig(this.serviceConfig.teleton.configPath);
+            const runtimePolicy = buildCodeAgentRuntimeConfig(this.teletonConfig);
+            this.codeAgentRuntimeConfig = runtimePolicy.config;
+            this.codeAgentOutputLimit = runtimePolicy.outputLimit;
             const allowWebSearch = Boolean(this.teletonConfig?.tavily_api_key);
             this.toolRegistry.setPolicy({
                 allowWebSearch
@@ -263,6 +365,7 @@ export class RuntimeAdapter {
             logInfo(
                 `Teleton core ready (provider: ${this.teletonConfig?.agent?.provider || "unknown"}, model: ${this.teletonConfig?.agent?.model || "unknown"})`
             );
+            logInfo(`Code-agent output token cap: ${this.codeAgentOutputLimit}`);
         })()
             .catch((error) => {
                 logError(`Teleton core initialization failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -290,7 +393,7 @@ export class RuntimeAdapter {
 
             const runtimeModules = this.modules;
             const memoryModules = this.modules;
-            const config = this.teletonConfig;
+            const config = this.codeAgentRuntimeConfig || this.teletonConfig;
             const embeddingProvider = config.embedding?.provider || "none";
             const vectorEnabled = embeddingProvider !== "none";
             const teletonMemoryPath = join(this.serviceConfig.runtime.teletonRoot, "memory.db");
@@ -314,7 +417,8 @@ export class RuntimeAdapter {
             logInfo("Memory layer ready.");
 
             const baseCodeAgentProfile = buildCodeAgentProfile({
-                allowWebSearch: Boolean(config?.tavily_api_key)
+                allowWebSearch: Boolean(config?.tavily_api_key),
+                loopVersion: 3
             });
 
             let AgentRuntimeCtor = runtimeModules.AgentRuntime;
@@ -387,72 +491,51 @@ export class RuntimeAdapter {
             ]
         };
 
-        const response = await this.modules.chatWithContext(this.teletonConfig.agent, {
-            systemPrompt,
-            context,
-            temperature: options.temperature ?? 0.2,
-            maxTokens: options.maxTokens ?? 4000,
-            persistTranscript: false
-        });
+        const structuredOptions = clampStructuredChatOptions(options, this.teletonConfig);
+        const executeStructuredChat = (maxTokens) =>
+            this.modules.chatWithContext((this.codeAgentRuntimeConfig || this.teletonConfig).agent, {
+                systemPrompt,
+                context,
+                temperature: structuredOptions.temperature ?? 0.2,
+                maxTokens,
+                persistTranscript: false
+            });
 
-        return String(response?.text || "");
-    }
-
-    async runStructuredBuildFlowV2({
-        sessionId,
-        prompt,
-        settings,
-        language,
-        languageName,
-        workspace,
-        codeAgentProfile,
-        onTaskEvent
-    }) {
-        return runStructuredBuildFlowV2Service({
-            serviceConfig: this.serviceConfig,
-            toolRegistry: this.toolRegistry,
-            callStructuredChat: this.callStructuredChat.bind(this),
-            sessionId,
-            prompt,
-            settings,
-            language,
-            languageName,
-            workspace,
-            codeAgentProfile,
-            onTaskEvent,
-            sessionChatId: this.sessionChatId.bind(this),
-            logger: {
-                warn: logWarn
+        let response;
+        try {
+            response = await executeStructuredChat(structuredOptions.maxTokens ?? 4000);
+        } catch (error) {
+            const retryLimit = deriveRetryOutputTokenLimit(structuredOptions.maxTokens, error);
+            if (!retryLimit || retryLimit >= (structuredOptions.maxTokens ?? 4000)) {
+                throw error;
             }
-        });
-    }
+            logWarn(
+                `Structured chat hit provider token budget. Retrying with lower output cap ${retryLimit} (was ${structuredOptions.maxTokens}).`
+            );
+            response = await executeStructuredChat(retryLimit);
+        }
 
-    async runClarificationFlow({
-        prompt,
-        language,
-        languageName,
-        workspace
-    }) {
-        return runClarificationFlowService({
-            callStructuredChat: this.callStructuredChat.bind(this),
-            prompt,
-            language,
-            languageName,
-            workspace
-        });
+        return extractStructuredChatText(response);
     }
 
     async processSessionPrompt(sessionId, prompt, onTaskEvent, settings = {}) {
-        return processSessionPromptService({
+        return processCodeTurn({
             adapter: this,
             sessionId,
             prompt,
             onTaskEvent,
-            settings,
-            logger: {
-                info: logInfo,
-                warn: logWarn
-            }
+            settings
+        });
+    }
+
+    async resumeSessionPrompt(sessionId, prompt, pausedTurn, onTaskEvent, settings = {}) {
+        return resumeCodeTurn({
+            adapter: this,
+            sessionId,
+            prompt,
+            pausedTurn,
+            onTaskEvent,
+            settings
         });
     }
 
@@ -474,7 +557,8 @@ export class RuntimeAdapter {
             ideCodeAgentRoot: this.serviceConfig.runtime.ideCodeAgentRoot,
             previewPort: this.serviceConfig.server.previewPort,
             enabledModules: buildCodeAgentProfile({
-                allowWebSearch: webSearchEnabled
+                allowWebSearch: webSearchEnabled,
+                loopVersion: 3
             }).allowedModules,
             webSearch: {
                 provider: "tavily",

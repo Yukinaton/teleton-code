@@ -12,6 +12,7 @@ import {
     runPowerShell,
     searchTextWithRg
 } from "./workspace-utils.js";
+import { validateLikelySourcePayload, validateSourceCandidate } from "./validation-engine.js";
 
 const WRITE_LIMIT = 300_000;
 const SEARCH_CONTEXT_RADIUS = 3;
@@ -25,6 +26,28 @@ function safeJsonParse(text) {
     } catch {
         return null;
     }
+}
+
+function safeLooseStructuredParse(text) {
+    const source = String(text || "").trim();
+    if (!source || !/^[\[{]/.test(source)) {
+        return null;
+    }
+
+    let normalized = source;
+    // Normalize common LLM near-miss payloads like:
+    // [{'body': {'margin': '0'}}, {'.app': {'display': 'grid'}}]
+    normalized = normalized
+        .replace(/([{,]\s*)'([^'\\]+?)'\s*:/g, '$1"$2":')
+        .replace(/:\s*'([^'\\]*?)'(?=\s*[,}\]])/g, ': "$1"')
+        .replace(/\[\s*'([^'\\]*?)'(?=\s*[,}\]])/g, '["$1"')
+        .replace(/,\s*'([^'\\]*?)'(?=\s*[,}\]])/g, ', "$1"');
+
+    return safeJsonParse(normalized);
+}
+
+function isPlainObject(value) {
+    return Object.prototype.toString.call(value) === "[object Object]";
 }
 
 function sanitizePackageList(rawPackages) {
@@ -50,67 +73,690 @@ function stringifyJson(value) {
     return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function coerceStructuredSourcePayload(relativePath, content) {
-    const source = String(content ?? "");
-    const isSourceLikeFile = /\.(html|css|js|mjs|cjs|jsx|ts|tsx|md|txt)$/i.test(String(relativePath || ""));
-    if (!isSourceLikeFile) {
+function decodeEscapedSourceLikeString(text) {
+    const source = String(text ?? "");
+    const actualNewlines = (source.match(/\n/g) || []).length;
+    const escapedNewlines = (source.match(/\\n/g) || []).length;
+
+    if (escapedNewlines < 3 || actualNewlines > 2) {
+        return source;
+    }
+
+    let candidate = source;
+    const trimmed = candidate.trim();
+
+    if (
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    ) {
+        try {
+            const normalizedQuotes = trimmed.startsWith("'")
+                ? `"${trimmed.slice(1, -1).replace(/"/g, '\\"')}"`
+                : trimmed;
+            const parsed = JSON.parse(normalizedQuotes);
+            if (typeof parsed === "string") {
+                return parsed;
+            }
+        } catch {
+            // Fall back to lightweight unescaping below.
+        }
+    }
+
+    candidate = candidate
+        .replace(/\\r\\n/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, "\t")
+        .replace(/\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, "\\");
+
+    return candidate;
+}
+
+function isSourceLikeFile(relativePath) {
+    return /\.(html|htm|css|js|mjs|cjs|jsx|ts|tsx|py|json|md|txt)$/i.test(String(relativePath || ""));
+}
+
+function trimToSourceAnchor(relativePath, content) {
+    const source = decodeEscapedSourceLikeString(content);
+    const extension = String(relativePath || "").toLowerCase();
+    const patterns = [];
+
+    if (/\.(html|htm)$/.test(extension)) {
+        patterns.push(/<!doctype html[\s\S]*$/i, /<html\b[\s\S]*$/i, /<body\b[\s\S]*$/i);
+    } else if (/\.css$/.test(extension)) {
+        patterns.push(
+            /(?:^|\n)\s*(?::root|body|html|main|canvas|button|[.#][\w-]+|[\w-]+\s*\{)[\s\S]*$/i,
+            /(?:^|\n)\s*@(?:media|keyframes|supports)\b[\s\S]*$/i
+        );
+    } else if (/\.(js|mjs|cjs|jsx|ts|tsx)$/.test(extension)) {
+        patterns.push(
+            /(?:^|\n)\s*(?:\/\/|\/\*)[\s\S]*$/,
+            /(?:^|\n)\s*(?:const|let|var|function|class|import|export)\b[\s\S]*$/,
+            /(?:^|\n)\s*(?:document|window)\.[\s\S]*$/,
+            /(?:^|\n)\s*addEventListener\b[\s\S]*$/,
+            /(?:^|\n)\s*requestAnimationFrame\b[\s\S]*$/
+        );
+    } else if (/\.py$/.test(extension)) {
+        patterns.push(
+            /(?:^|\n)\s*(?:#|from|import|def|class|async\s+def|if __name__\s*==|@[\w.]+|[A-Za-z_][\w]*\s*=)\b[\s\S]*$/m
+        );
+    } else if (/\.json$/.test(extension) || /\.(md|txt)$/.test(extension)) {
+        return source;
+    }
+
+    for (const pattern of patterns) {
+        const match = source.match(pattern);
+        if (!match?.[0]) {
+            continue;
+        }
+
+        const candidate = match[0].trimStart();
+        const removedPrefix = source.length - candidate.length;
+        if (candidate.length >= 120 && removedPrefix >= 8) {
+            return candidate;
+        }
+    }
+
+    return source;
+}
+
+function collectFencedSourceCandidates(text, candidates) {
+    const source = String(text || "");
+    const fencePattern = /```[\w-]*\n([\s\S]*?)```/g;
+    let match;
+    while ((match = fencePattern.exec(source)) !== null) {
+        const candidate = decodeEscapedSourceLikeString(match[1] || "");
+        if (candidate.trim()) {
+            candidates.push(candidate);
+        }
+    }
+}
+
+function scoreSourceCandidate(relativePath, content) {
+    const source = trimToSourceAnchor(relativePath, content);
+    const trimmed = String(source || "").trim();
+    if (!trimmed) {
+        return -1;
+    }
+
+    let score = Math.min(trimmed.length, 1200) / 24;
+    const lineCount = trimmed.split(/\r?\n/).length;
+    score += Math.min(lineCount, 60) * 1.5;
+
+    if (/^__teleton_code_invalid_serialized_source__:/i.test(trimmed)) {
+        return -1;
+    }
+
+    if (/\\n/.test(trimmed) && !/\n/.test(trimmed)) {
+        score -= 10;
+    }
+
+    const extension = String(relativePath || "").toLowerCase();
+    if (/\.(html|htm)$/.test(extension)) {
+        if (/<(?:!doctype|html|head|body|div|main|section|script|style)\b/i.test(trimmed)) {
+            score += 30;
+        }
+        if (/<[a-z][\s\S]*>/.test(trimmed)) {
+            score += 12;
+        }
+    } else if (/\.css$/.test(extension)) {
+        if (/[.#@a-z-][^{\n]*\{[\s\S]*:[^;]+;[\s\S]*\}/i.test(trimmed)) {
+            score += 30;
+        }
+        if (/\b(?:display|position|color|background|font|margin|padding|grid|flex)\s*:/i.test(trimmed)) {
+            score += 12;
+        }
+    } else if (/\.(js|mjs|cjs|jsx|ts|tsx)$/.test(extension)) {
+        if (/\b(?:const|let|var|function|class|import|export|return|document|window|addEventListener|requestAnimationFrame|=>)\b/.test(trimmed)) {
+            score += 30;
+        }
+        if (/[;{}]/.test(trimmed)) {
+            score += 10;
+        }
+    } else if (/\.py$/.test(extension)) {
+        if (/^\s*(?:from|import|def|class|async\s+def|if __name__\s*==|@[\w.]+|[A-Za-z_][\w]*\s*=)/m.test(trimmed)) {
+            score += 30;
+        }
+        if (/:\s*(?:#.*)?$/m.test(trimmed) || /\breturn\b/.test(trimmed)) {
+            score += 10;
+        }
+    } else if (/\.json$/.test(extension)) {
+        try {
+            JSON.parse(trimmed);
+            score += 28;
+        } catch {
+            score -= 20;
+        }
+    } else if (/\.(md|txt)$/.test(extension)) {
+        score += 8;
+    }
+
+    if (/^\s*[\[{]/.test(trimmed) && !/<[a-z]/i.test(trimmed)) {
+        score -= 28;
+    }
+
+    return score;
+}
+
+function looksLikeHtmlSource(content) {
+    const source = String(content || "").trim();
+    if (!source || /^\s*\[\s*[{'"`]/.test(source)) {
+        return false;
+    }
+
+    return (
+        /<!doctype html>/i.test(source) ||
+        (/<html[\s>]/i.test(source) && /<body[\s>]/i.test(source))
+    );
+}
+
+function looksLikeCssSource(content) {
+    const source = String(content || "").trim();
+    if (!source || /^\s*\[\s*[{'"`]/.test(source) || /^\s*\{\s*['"`]/.test(source)) {
+        return false;
+    }
+
+    const open = (source.match(/\{/g) || []).length;
+    const close = (source.match(/\}/g) || []).length;
+    if (open === 0 || open !== close) {
+        return false;
+    }
+
+    return (
+        /(?:^|\n)\s*(?:@(?:media|supports|keyframes)|:root|body|html|main|canvas|button|[.#][\w-]+|[\w-]+\s*\{)/i.test(source) &&
+        /:\s*[^;]+;/i.test(source)
+    );
+}
+
+function looksLikeScriptSource(content) {
+    const source = String(content || "").trim();
+    if (!source || /^\s*\[\s*[{'"`]/.test(source) || /^\s*\{\s*['"`]/.test(source)) {
+        return false;
+    }
+
+    return /\b(?:const|let|var|function|class|import|export|return|document|window|addEventListener|requestAnimationFrame)\b|=>/.test(
+        source
+    );
+}
+
+function looksLikePythonSource(content) {
+    const source = String(content || "").trim();
+    if (!source || /^\s*\[\s*[{'"`]/.test(source) || /^\s*\{\s*['"`]/.test(source)) {
+        return false;
+    }
+
+    return /^\s*(?:from|import|def|class|async\s+def|if __name__\s*==|@[\w.]+|[A-Za-z_][\w]*\s*=)/m.test(
+        source
+    );
+}
+
+function looksLikeJsonSource(content) {
+    const source = String(content || "").trim();
+    if (!source) {
+        return false;
+    }
+
+    try {
+        JSON.parse(source);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function isPreferredRecoveredSource(relativePath, content) {
+    const normalizedPath = String(relativePath || "").toLowerCase();
+    if (/\.(html?|htm)$/i.test(normalizedPath)) {
+        return looksLikeHtmlSource(content);
+    }
+    if (/\.css$/i.test(normalizedPath)) {
+        return looksLikeCssSource(content);
+    }
+    if (/\.(js|mjs|cjs|jsx|ts|tsx)$/i.test(normalizedPath)) {
+        return looksLikeScriptSource(content);
+    }
+    if (/\.py$/i.test(normalizedPath)) {
+        return looksLikePythonSource(content);
+    }
+    if (/\.json$/i.test(normalizedPath)) {
+        return looksLikeJsonSource(content);
+    }
+    return false;
+}
+
+function collectStructuredSourceCandidates(value, candidates, seen) {
+    if (value == null) {
+        return;
+    }
+
+    if (typeof value === "string") {
+        const decoded = decodeEscapedSourceLikeString(value);
+        if (decoded.trim()) {
+            candidates.push(decoded);
+        }
+        return;
+    }
+
+    if (typeof value !== "object") {
+        return;
+    }
+
+    if (seen.has(value)) {
+        return;
+    }
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+        if (value.every((item) => typeof item === "string")) {
+            const joined = decodeEscapedSourceLikeString(value.join("\n"));
+            if (joined.trim()) {
+                candidates.push(joined);
+            }
+        }
+
+        for (const item of value) {
+            collectStructuredSourceCandidates(item, candidates, seen);
+        }
+        return;
+    }
+
+    const prioritizedKeys = [
+        "content",
+        "code",
+        "text",
+        "source",
+        "html",
+        "css",
+        "js",
+        "javascript",
+        "typescript",
+        "script",
+        "lines",
+        "body",
+        "template",
+        "markup"
+    ];
+
+    for (const key of prioritizedKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            collectStructuredSourceCandidates(value[key], candidates, seen);
+        }
+    }
+
+    for (const nestedValue of Object.values(value)) {
+        collectStructuredSourceCandidates(nestedValue, candidates, seen);
+    }
+}
+
+function collectQuotedSourceCandidates(relativePath, text, candidates) {
+    const source = String(text || "");
+    collectFencedSourceCandidates(source, candidates);
+    const patterns = [
+        /"((?:[^"\\]|\\[\s\S]){40,})"/g,
+        /'((?:[^'\\]|\\[\s\S]){40,})'/g,
+        /`((?:[^`\\]|\\[\s\S]){40,})`/g
+    ];
+
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(source)) !== null) {
+            const decoded = decodeEscapedSourceLikeString(match[1]);
+            if (decoded.trim()) {
+                candidates.push(decoded);
+                const anchored = trimToSourceAnchor(relativePath, decoded);
+                if (anchored.trim() && anchored !== decoded) {
+                    candidates.push(anchored);
+                }
+            }
+        }
+    }
+}
+
+function extractPseudoStringArrayPrefix(text) {
+    const source = String(text || "").trim();
+    const startIndex = source.search(/\[\s*['"`]/);
+    if (startIndex === -1) {
+        return "";
+    }
+
+    const candidateSource = source.slice(startIndex);
+
+    const lines = [];
+    let index = 1;
+    let activeQuote = null;
+    let buffer = "";
+    let escaping = false;
+
+    while (index < candidateSource.length) {
+        const char = candidateSource[index];
+
+        if (!activeQuote) {
+            if (char === "]") {
+                return lines.length > 0 ? lines.join("\n") : "";
+            }
+
+            if (char === "'" || char === '"' || char === "`") {
+                activeQuote = char;
+                buffer = "";
+            }
+
+            index += 1;
+            continue;
+        }
+
+        if (escaping) {
+            buffer += `\\${char}`;
+            escaping = false;
+            index += 1;
+            continue;
+        }
+
+        if (char === "\\") {
+            escaping = true;
+            index += 1;
+            continue;
+        }
+
+        if (char === activeQuote) {
+            const decoded = decodeEscapedSourceLikeString(buffer);
+            if (decoded.trim()) {
+                lines.push(decoded);
+            }
+            activeQuote = null;
+            buffer = "";
+            index += 1;
+            continue;
+        }
+
+        buffer += char;
+        index += 1;
+    }
+
+    return "";
+}
+
+function collectStructuredSourceFragments(value, fragments, seen) {
+    if (value == null) {
+        return;
+    }
+
+    if (typeof value === "string") {
+        const decoded = decodeEscapedSourceLikeString(value);
+        if (decoded.trim()) {
+            fragments.push(decoded);
+        }
+        return;
+    }
+
+    if (typeof value !== "object" || seen.has(value)) {
+        return;
+    }
+
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            collectStructuredSourceFragments(item, fragments, seen);
+        }
+        return;
+    }
+
+    const prioritizedKeys = [
+        "line",
+        "text",
+        "content",
+        "code",
+        "source",
+        "value",
+        "body",
+        "template",
+        "html",
+        "css",
+        "js",
+        "javascript",
+        "typescript"
+    ];
+
+    for (const key of prioritizedKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            collectStructuredSourceFragments(value[key], fragments, seen);
+        }
+    }
+
+    for (const [key, nestedValue] of Object.entries(value)) {
+        if (prioritizedKeys.includes(key)) {
+            continue;
+        }
+        collectStructuredSourceFragments(nestedValue, fragments, seen);
+    }
+}
+
+function flattenStructuredSourceFragments(value) {
+    const fragments = [];
+    collectStructuredSourceFragments(value, fragments, new Set());
+
+    const normalized = fragments
+        .map((item) => String(item || "").trim())
+        .filter(Boolean);
+
+    if (normalized.length === 0) {
+        return "";
+    }
+
+    return normalized.join("\n");
+}
+
+function serializeCssDeclarations(value, indent = "  ") {
+    if (typeof value === "string") {
+        const trimmed = decodeEscapedSourceLikeString(value).trim();
+        return trimmed ? `${indent}${trimmed}` : "";
+    }
+
+    if (Array.isArray(value)) {
+        const lines = value
+            .map((item) => serializeCssDeclarations(item, indent))
+            .filter(Boolean);
+        return lines.join("\n");
+    }
+
+    if (!isPlainObject(value)) {
+        return "";
+    }
+
+    return Object.entries(value)
+        .map(([property, propertyValue]) => {
+            if (propertyValue == null || propertyValue === "") {
+                return "";
+            }
+
+            if (isPlainObject(propertyValue)) {
+                const nested = serializeCssDeclarations(propertyValue, `${indent}  `);
+                return nested
+                    ? `${indent}${String(property).trim()} {\n${nested}\n${indent}}`
+                    : "";
+            }
+
+            if (Array.isArray(propertyValue)) {
+                const joined = propertyValue
+                    .map((item) => String(item ?? "").trim())
+                    .filter(Boolean)
+                    .join(" ");
+                return joined ? `${indent}${String(property).trim()}: ${joined};` : "";
+            }
+
+            return `${indent}${String(property).trim()}: ${String(propertyValue).trim()};`;
+        })
+        .filter(Boolean)
+        .join("\n");
+}
+
+function trySerializeCssStructure(value) {
+    if (Array.isArray(value)) {
+        const blocks = value.map((item) => trySerializeCssStructure(item)).filter(Boolean);
+        return blocks.join("\n\n");
+    }
+
+    if (!isPlainObject(value)) {
+        return "";
+    }
+
+    const selector = typeof value.selector === "string" ? value.selector.trim() : "";
+    const declarationSource = serializeCssDeclarations(
+        value.declarations || value.styles || value.rules || value.properties || null
+    );
+    if (selector && declarationSource) {
+        return `${selector} {\n${declarationSource}\n}`;
+    }
+
+    const selectorBlocks = Object.entries(value)
+        .map(([key, nestedValue]) => {
+            if (!nestedValue || !isPlainObject(nestedValue)) {
+                return "";
+            }
+
+            const body = serializeCssDeclarations(nestedValue);
+            return body ? `${String(key).trim()} {\n${body}\n}` : "";
+        })
+        .filter(Boolean);
+
+    if (selectorBlocks.length > 0) {
+        return selectorBlocks.join("\n\n");
+    }
+
+    return "";
+}
+
+export function coerceStructuredSourceValue(relativePath, value, options = {}) {
+    const strictStructured = options?.strictStructured !== false;
+    const original = typeof value === "string" ? value : JSON.stringify(value);
+    const source = String(original ?? "");
+
+    if (!isSourceLikeFile(relativePath)) {
         return {
             content: source,
             normalized: false
         };
     }
 
-    const trimmed = source.trim();
+    const decoded = decodeEscapedSourceLikeString(source);
+    const trimmed = decoded.trim();
     if (!trimmed || !/^[\[{]/.test(trimmed)) {
         return {
-            content: source,
-            normalized: false
+            content: decoded,
+            normalized: decoded !== source
         };
     }
 
-    const parsed = safeJsonParse(trimmed);
-    if (!parsed) {
+    const pseudoLineArray = extractPseudoStringArrayPrefix(trimmed);
+    const parsed = safeJsonParse(trimmed) || safeLooseStructuredParse(trimmed);
+    const structuredPayloadDetected = Boolean(parsed) || Boolean(pseudoLineArray.trim()) || /^[\[{]/.test(trimmed);
+    const candidates = [];
+    if (pseudoLineArray.trim()) {
+        if (isPreferredRecoveredSource(relativePath, pseudoLineArray)) {
+            return {
+                content: pseudoLineArray,
+                normalized: pseudoLineArray !== source
+            };
+        }
+        candidates.push(pseudoLineArray);
+    }
+    if (parsed) {
+        if (/\.json$/i.test(relativePath)) {
+            const jsonCandidate = stringifyJson(parsed);
+            return {
+                content: jsonCandidate,
+                normalized: jsonCandidate !== source
+            };
+        }
+        if (/\.css$/i.test(relativePath)) {
+            const cssCandidate = trySerializeCssStructure(parsed);
+            if (cssCandidate.trim()) {
+                if (isPreferredRecoveredSource(relativePath, cssCandidate)) {
+                    return {
+                        content: cssCandidate,
+                        normalized: cssCandidate !== source
+                    };
+                }
+                candidates.push(cssCandidate);
+            }
+        }
+        collectStructuredSourceCandidates(parsed, candidates, new Set());
+        const flattened = flattenStructuredSourceFragments(parsed);
+        if (flattened.trim()) {
+            if (isPreferredRecoveredSource(relativePath, flattened)) {
+                return {
+                    content: flattened,
+                    normalized: flattened !== source
+                };
+            }
+            candidates.push(flattened);
+        }
+    } else {
+        collectQuotedSourceCandidates(relativePath, trimmed, candidates);
+    }
+    if (decoded.trim()) {
+        candidates.push(decoded);
+        const anchoredDecoded = trimToSourceAnchor(relativePath, decoded);
+        if (anchoredDecoded.trim() && anchoredDecoded !== decoded) {
+            candidates.push(anchoredDecoded);
+        }
+    }
+
+    let bestCandidate = null;
+    let bestScore = -1;
+    for (const candidate of candidates) {
+        const score = scoreSourceCandidate(relativePath, candidate);
+        if (score > bestScore) {
+            bestScore = score;
+            bestCandidate = candidate;
+        }
+    }
+
+    if (
+        bestCandidate &&
+        bestScore >= 0 &&
+        (
+            !structuredPayloadDetected ||
+            isPreferredRecoveredSource(relativePath, bestCandidate) ||
+            !strictStructured
+        )
+    ) {
         return {
-            content: source,
-            normalized: false
+            content: bestCandidate,
+            normalized: bestCandidate !== source
         };
     }
 
-    if (Array.isArray(parsed) && parsed.every((line) => typeof line === "string")) {
+    if (structuredPayloadDetected) {
         return {
-            content: parsed.join("\n"),
+            content: `${SERIALIZED_SOURCE_SENTINEL_PREFIX}${String(relativePath || "unknown")}`,
             normalized: true
         };
     }
 
-    if (parsed && typeof parsed === "object") {
-        for (const key of ["content", "code", "text", "source"]) {
-            if (typeof parsed[key] === "string") {
-                return {
-                    content: parsed[key],
-                    normalized: true
-                };
-            }
-            if (Array.isArray(parsed[key]) && parsed[key].every((line) => typeof line === "string")) {
-                return {
-                    content: parsed[key].join("\n"),
-                    normalized: true
-                };
-            }
-        }
+    return {
+        content: decoded,
+        normalized: decoded !== source
+    };
+}
 
-        if (Array.isArray(parsed.lines) && parsed.lines.every((line) => typeof line === "string")) {
-            return {
-                content: parsed.lines.join("\n"),
-                normalized: true
-            };
-        }
+function coerceStructuredSourcePayload(relativePath, content) {
+    return coerceStructuredSourceValue(relativePath, content);
+}
+
+function normalizeLineArray(lines, relativePath) {
+    if (!Array.isArray(lines)) {
+        throw new Error(`"${relativePath}" requires an array of plain source lines.`);
     }
 
-    return {
-        content: source,
-        normalized: false
-    };
+    if (lines.some((line) => typeof line !== "string")) {
+        throw new Error(
+            `CRITICAL ERROR: "${relativePath}" received non-string line items. Provide one plain source line per array item, without nested arrays or objects.`
+        );
+    }
+
+    return lines;
 }
 
 function inspectWorkspaceProject(workspacePath) {
@@ -182,13 +828,6 @@ function chooseProjectCheckCommands(inspection) {
                 command: `npm run ${name}`
             });
         }
-    }
-
-    if (suggestions.length === 0 && inspection.packageJsonPresent) {
-        suggestions.push({
-            kind: "fallback",
-            command: "npm run"
-        });
     }
 
     return suggestions.slice(0, 4);
@@ -272,6 +911,10 @@ function detectSuspiciousSerializedPayload(relativePath, content) {
     const source = String(content || "").trim();
     if (!source) return null;
 
+    if (new RegExp(`^${SERIALIZED_SOURCE_SENTINEL_PREFIX}`, "i").test(source)) {
+        return `CRITICAL ERROR: "${relativePath}" still contains a rejected serialized source payload. Write the real file content as plain source code, not a wrapped array or object dump.`;
+    }
+
     if (/\.json$/i.test(relativePath)) {
         try {
             JSON.parse(source);
@@ -280,9 +923,13 @@ function detectSuspiciousSerializedPayload(relativePath, content) {
         }
     }
 
-    const isCodeFile = /\.(html|css|js|mjs|cjs|jsx|ts|tsx)$/i.test(relativePath);
+    const isCodeFile = /\.(html|css|js|mjs|cjs|jsx|ts|tsx|py)$/i.test(relativePath);
     if (!isCodeFile) return null;
-    const isScriptLikeFile = /\.(js|mjs|cjs|jsx|ts|tsx)$/i.test(relativePath);
+    const isScriptLikeFile = /\.(js|mjs|cjs|jsx|ts|tsx|py)$/i.test(relativePath);
+    const genericPayloadProblem = validateLikelySourcePayload(relativePath, source);
+    if (genericPayloadProblem) {
+        return `CRITICAL ERROR: ${genericPayloadProblem}. Write plain code only, without JSON-like wrapper arrays or object dumps. If the file already exists, repair it with a narrow patch or a clean line-based rewrite.`;
+    }
 
     // Check if it's a JSON array. CSS often starts with [ (attr selectors). JS/TS often starts with [ (destructuring).
     // We only block if it starts with [ and ends with ] AND is valid JSON array.
@@ -293,12 +940,32 @@ function detectSuspiciousSerializedPayload(relativePath, content) {
                            (source.startsWith('[') && !source.includes('":') && !source.includes("':"));
                            
         if (!isLikelyCode || source.includes("['") || source.includes('["')) {
-            return `CRITICAL ERROR: You are trying to write a serialized JSON structure instead of pure source code to "${relativePath}". You must provide ONLY the raw file content (HTML/CSS/JS) without any wrapping objects or array notation.`;
+        return `CRITICAL ERROR: You are trying to write a serialized structure instead of plain source code to "${relativePath}". You must provide ONLY the raw file content without wrapper arrays, objects, selector maps, or dictionary dumps. If the file already exists, repair it with a narrow patch or a clean line-based rewrite.`;
         }
     }
 
     if (/^\{[\s\S]*'[^']+'\s*:/.test(source)) {
         return `CRITICAL ERROR: "${relativePath}" looks like a Python-style object literal with single-quoted keys. Write real source code or valid JSON only.`;
+    }
+
+    const containsEscapedCodeBlob = /\\n\s*(?:const|let|var|function|class|import|export|document|window|getelementbyid|addEventListener|playerReset|updateScore|requestAnimationFrame)\b/i.test(
+        source
+    );
+    if (
+        isScriptLikeFile &&
+        /^\s*\[\s*\[/.test(source) &&
+        containsEscapedCodeBlob
+    ) {
+        return `CRITICAL ERROR: "${relativePath}" contains a serialized array payload with escaped source code inside it. Write plain executable script text only. If the file already exists, repair it with a narrow patch or a clean line-based rewrite.`;
+    }
+
+    if (
+        isScriptLikeFile &&
+        /['"`][^'"`]{0,240}\\n(?:const|let|var|function|class|import|export|document|window|getelementbyid|addEventListener|playerReset|updateScore|requestAnimationFrame)\b/i.test(
+            source
+        )
+    ) {
+        return `CRITICAL ERROR: "${relativePath}" contains quoted escaped script source instead of real file content. Send raw source text, not a serialized string blob. If the file already exists, repair it with a narrow patch or a clean line-based rewrite.`;
     }
 
     if (source.startsWith("[") && source.endsWith("]")) {
@@ -307,7 +974,7 @@ function detectSuspiciousSerializedPayload(relativePath, content) {
             const cleaned = source.replace(/'/g, '"'); // Tentative fix for single quotes
             const parsed = JSON.parse(cleaned);
             if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
-                return `CRITICAL ERROR: You sent a serialized JSON array instead of real source code for "${relativePath}". You must send the actual file content as plain text. Example: "body { background: red; }", NOT "[{ 'body': 'background: red' }]".`;
+                return `CRITICAL ERROR: You sent a serialized JSON array instead of real source code for "${relativePath}". You must send the actual file content as plain text, not a wrapped data structure. If the file already exists, repair it with a narrow patch or a clean line-based rewrite.`;
             }
         } catch (e) {
             // Not JSON or non-fixable single quotes
@@ -316,15 +983,16 @@ function detectSuspiciousSerializedPayload(relativePath, content) {
 
     if (isScriptLikeFile) {
         const startsLikeSerializedData = /^[\[{]/.test(source);
-        const pythonTokens = /\b(?:False|True|None)\b/.test(source);
         const quotedKeyPairs = (source.match(/['"`][\w$ -]+['"`]\s*:/g) || []).length;
-        const scriptSignals = /\b(?:const|let|var|function|class|import|export|return|document|window|localStorage|addEventListener|JSON|Array|Object|new)\b|=>/.test(source);
+        const scriptSignals = /\b(?:const|let|var|function|class|import|export|return|document|window|localStorage|addEventListener|JSON|Array|Object|new|from|def|async|await|print|if __name__)\b|=>/.test(source);
+        const pythonLiteralSignals = /\b(?:False|True|None)\b/.test(source);
 
         if (
-            pythonTokens ||
-            (startsLikeSerializedData && quotedKeyPairs >= 2 && !scriptSignals)
+            startsLikeSerializedData &&
+            (quotedKeyPairs >= 2 || pythonLiteralSignals) &&
+            !scriptSignals
         ) {
-            return `CRITICAL ERROR: "${relativePath}" looks like serialized data instead of executable script source. Write plain JavaScript/TypeScript code only, without JSON-like wrapper arrays or object dumps.`;
+            return `CRITICAL ERROR: "${relativePath}" looks like serialized data instead of executable source code. Write plain code only, without JSON-like wrapper arrays or object dumps. If the file already exists, repair it with a narrow patch or a clean line-based rewrite.`;
         }
     }
 
@@ -337,6 +1005,16 @@ function canonicalizeRejectedSourceParams(params, relativePath) {
     }
 
     const sentinel = `${SERIALIZED_SOURCE_SENTINEL_PREFIX}${String(relativePath || "unknown")}`;
+    const previewSource =
+        typeof params.content === "string"
+            ? params.content
+            : Array.isArray(params.lines)
+              ? params.lines.join("\n")
+              : "";
+    const preview = String(previewSource || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 240);
 
     if (typeof params.content === "string") {
         params.content = sentinel;
@@ -344,6 +1022,34 @@ function canonicalizeRejectedSourceParams(params, relativePath) {
 
     if (Array.isArray(params.lines)) {
         params.lines = [sentinel];
+    }
+
+    params.__teletonCodeRejectedSourceMeta = {
+        path: String(relativePath || "unknown"),
+        preview
+    };
+}
+
+function getValidationServiceConfig(context) {
+    return (
+        context?.serviceConfig ||
+        context?.config?.serviceConfig || {
+            runtime: {
+                maxShellTimeoutMs: 120000
+            }
+        }
+    );
+}
+
+async function ensureValidCompleteSource(target, content, context, workspacePath) {
+    const sourceValidationProblem = await validateSourceCandidate(
+        target.relativePath,
+        content,
+        getValidationServiceConfig(context),
+        workspacePath
+    );
+    if (sourceValidationProblem) {
+        throw new Error(`CRITICAL ERROR: "${target.relativePath}" is not a valid complete source file yet. ${sourceValidationProblem}`);
     }
 }
 
@@ -696,7 +1402,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
         {
             tool: {
                 name: "code_write_file",
-                description: "Write full file contents inside the active coding workspace. Use for creating new files or fully replacing small files.",
+                description: "Write one full plain-text file inside the active coding workspace. Prefer this for creating or fully replacing HTML, CSS, JavaScript, and TypeScript source files with one raw source string.",
                 parameters: {
                     type: "object",
                     properties: {
@@ -710,6 +1416,12 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
             executor: async (params, context) => {
                 const workspace = getWorkspaceOrThrow(resolveWorkspace, context.chatId);
                 const target = resolveInsideWorkspace(workspace.path, params.path);
+                if (isSourceLikeFile(target.relativePath) && typeof params.content !== "string") {
+                    canonicalizeRejectedSourceParams(params, target.relativePath);
+                    throw new Error(
+                        `CRITICAL ERROR: "${target.relativePath}" requires one raw source string as file content. Do not send arrays, objects, selector maps, or structured wrappers.`
+                    );
+                }
                 const normalizedPayload = coerceStructuredSourcePayload(target.relativePath, params.content);
                 const nextContent = normalizedPayload.content;
                 if (nextContent.length > WRITE_LIMIT) {
@@ -721,6 +1433,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                     canonicalizeRejectedSourceParams(params, target.relativePath);
                     throw new Error(suspiciousPayload);
                 }
+                await ensureValidCompleteSource(target, nextContent, context, workspace.path);
                 mkdirSync(dirname(target.absolute), { recursive: true });
                 writeFileSync(target.absolute, nextContent, "utf-8");
                 return {
@@ -738,7 +1451,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
         {
             tool: {
                 name: "code_write_file_lines",
-                description: "Write full file contents as an ordered array of lines. Prefer this for HTML, CSS, JS, or other text that contains many quotes or markup characters.",
+                description: "Write full file contents as an ordered array of plain source lines. Use this only when you intentionally need a line-based rewrite or repair.",
                 parameters: {
                     type: "object",
                     properties: {
@@ -754,10 +1467,19 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                 category: "action"
             },
             executor: async (params, context) => {
-                const rawContent = Array.isArray(params.lines) ? params.lines.join("\n") : "";
                 const workspace = getWorkspaceOrThrow(resolveWorkspace, context.chatId);
                 const target = resolveInsideWorkspace(workspace.path, params.path);
-                const normalizedPayload = coerceStructuredSourcePayload(target.relativePath, rawContent);
+                const plainLineArray = Array.isArray(params.lines) && params.lines.every((line) => typeof line === "string");
+                if (isSourceLikeFile(target.relativePath) && !plainLineArray) {
+                    canonicalizeRejectedSourceParams(params, target.relativePath);
+                    throw new Error(
+                        `CRITICAL ERROR: "${target.relativePath}" requires an array of plain source lines. Do not send nested arrays, objects, selector maps, or serialized wrappers.`
+                    );
+                }
+                const normalizedLines = plainLineArray ? normalizeLineArray(params.lines, target.relativePath) : null;
+                const normalizedPayload = plainLineArray
+                    ? coerceStructuredSourcePayload(target.relativePath, normalizedLines.join("\n"))
+                    : coerceStructuredSourceValue(target.relativePath, params.lines);
                 const content = normalizedPayload.content;
                 if (content.length > WRITE_LIMIT) {
                     throw new Error(`Refusing to write more than ${WRITE_LIMIT} characters at once`);
@@ -768,6 +1490,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                     canonicalizeRejectedSourceParams(params, target.relativePath);
                     throw new Error(`${suspiciousPayload}. Provide plain source lines instead of a serialized array.`);
                 }
+                await ensureValidCompleteSource(target, content, context, workspace.path);
                 mkdirSync(dirname(target.absolute), { recursive: true });
                 writeFileSync(target.absolute, content, "utf-8");
                 return {
@@ -776,7 +1499,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                         workspace: workspace.name,
                         path: target.relativePath,
                         writtenChars: content.length,
-                        lineCount: Array.isArray(params.lines) ? params.lines.length : 0,
+                        lineCount: plainLineArray ? normalizedLines.length : content.split(/\r?\n/).length,
                         normalizedWrappedPayload: normalizedPayload.normalized,
                         diff: before === null ? null : buildDiffPayload(target.relativePath, before, content)
                     }
@@ -887,6 +1610,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                     ? original.split(params.search).join(params.replace)
                     : original.replace(params.search, params.replace);
 
+                await ensureValidCompleteSource(target, next, context, workspace.path);
                 writeFileSync(target.absolute, next, "utf-8");
                 return {
                     success: true,
@@ -960,6 +1684,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                     throw new Error(`Refusing to write more than ${WRITE_LIMIT} characters at once`);
                 }
 
+                await ensureValidCompleteSource(target, current, context, workspace.path);
                 writeFileSync(target.absolute, current, "utf-8");
                 return {
                     success: true,
@@ -1011,6 +1736,7 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
                 if (next.length > WRITE_LIMIT) {
                     throw new Error(`Refusing to write more than ${WRITE_LIMIT} characters at once`);
                 }
+                await ensureValidCompleteSource(target, next, context, workspace.path);
                 writeFileSync(target.absolute, next, "utf-8");
                 return {
                     success: true,
@@ -1304,8 +2030,13 @@ export function buildCodingTools({ resolveWorkspace, shellTimeoutMs, shellOutput
 
                 if (commands.length === 0) {
                     return {
-                        success: false,
-                        error: "No project check commands were detected for this workspace"
+                        success: true,
+                        data: {
+                            workspace: workspace.name,
+                            skipped: true,
+                            reason: "No project check commands were detected for this workspace",
+                            results: []
+                        }
                     };
                 }
 

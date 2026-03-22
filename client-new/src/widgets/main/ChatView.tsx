@@ -8,280 +8,21 @@ import { X, Play, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useI18n } from '../../shared/i18n/useI18n';
 import { repairMojibake } from '../../shared/utils/text';
 import { resolvePreviewUrl } from '../../shared/utils/preview';
-
-interface MessagePart {
-  type: 'text' | 'code';
-  content: string;
-}
-
-function formatAttachmentSize(bytes?: number) {
-  if (!bytes || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
-}
-
-function extractStepFileHint(step: any) {
-  const params = step?.params || {};
-  const candidates = [
-    params.path,
-    params.targetPath,
-    params.targetFile,
-    params.file,
-    step?.thought,
-    step?.title,
-  ];
-
-  for (const candidate of candidates) {
-    const normalized = String(candidate || '').trim();
-    if (!normalized) continue;
-    const match = normalized.match(/([A-Za-z0-9_./-]+\.(?:html?|css|js|jsx|ts|tsx|json|md|txt))/i);
-    if (match) {
-      return match[1].toLowerCase();
-    }
-  }
-
-  return '';
-}
-
-function buildStepIdentity(step: any) {
-  if (step?.toolCallId) {
-    return `tool:${step.toolCallId}`;
-  }
-
-  const params = step?.params || {};
-  const path = params.path || params.targetPath || params.targetFile || params.file || '';
-  const command = params.command || '';
-  const fileHint = extractStepFileHint(step);
-
-  if (step?.type === 'planning') {
-    if (['structured_plan', 'structured_bundle', 'structured_dom_repair'].includes(step?.name)) {
-      return `planning:${step.name}`;
-    }
-    return `planning:${step?.name || step?.title || 'step'}:${fileHint}`;
-  }
-
-  return `step:${step?.type || 'unknown'}:${step?.name || step?.title || 'step'}:${path || command || fileHint}`;
-}
-
-function inferPreviewBlockType(path: string): 'markdown' | 'code' | 'runnable_code' {
-  const normalized = String(path || '').toLowerCase();
-  if (normalized.endsWith('.md')) {
-    return 'markdown';
-  }
-  if (normalized.endsWith('.html') || normalized.endsWith('.htm')) {
-    return 'runnable_code';
-  }
-  return 'code';
-}
-
-function looksLikeBrokenText(value: string) {
-  return /(?:Р.|С.|Ѓ|Ќ|љ|ў|џ){3,}/.test(String(value || '')) || repairMojibake(value) !== String(value || '');
-}
-
-function deriveStepCopy(step: any, language: 'ru' | 'en') {
-  const params = step?.params || {};
-  const path = params.path || params.targetPath || params.targetFile || '';
-  const fileName = String(path || '').split(/[\\/]/).pop() || '';
-  const command = params.command || '';
-
-  const fallback = {
-    code_list_files: {
-      ru: { title: 'Обзор проекта', thought: 'Проверяю структуру файлов и каталогов.' },
-      en: { title: 'Project overview', thought: 'Reviewing the workspace structure first.' },
-    },
-    code_read_file: {
-      ru: { title: 'Чтение файла', thought: `Открываю ${fileName || 'файл'}, чтобы понять текущую реализацию.` },
-      en: { title: 'Reading file', thought: `Opening ${fileName || 'the file'} to inspect the current implementation.` },
-    },
-    code_inspect_project: {
-      ru: { title: 'Анализ проекта', thought: 'Собираю контекст по проекту перед следующими действиями.' },
-      en: { title: 'Project analysis', thought: 'Gathering project context before the next changes.' },
-    },
-    code_search_context: {
-      ru: { title: 'Поиск контекста', thought: 'Ищу связанные места в коде и похожие реализации.' },
-      en: { title: 'Searching context', thought: 'Looking for related code paths and similar implementations.' },
-    },
-    code_write_file: {
-      ru: { title: 'Создание файла', thought: `Записываю ${fileName || 'новый файл'} с нужной логикой.` },
-      en: { title: 'Creating file', thought: `Writing ${fileName || 'a new file'} with the required logic.` },
-    },
-    code_write_file_lines: {
-      ru: { title: 'Запись файла', thought: `Формирую содержимое ${fileName || 'файла'} построчно.` },
-      en: { title: 'Writing file', thought: `Building ${fileName || 'the file'} line by line.` },
-    },
-    code_write_json: {
-      ru: { title: 'Запись JSON', thought: `Обновляю ${fileName || 'JSON-файл'} структурированными данными.` },
-      en: { title: 'Writing JSON', thought: `Updating ${fileName || 'the JSON file'} with structured data.` },
-    },
-    code_patch_file: {
-      ru: { title: 'Правка кода', thought: `Вношу точечные изменения в ${fileName || 'файл'}.` },
-      en: { title: 'Updating code', thought: `Applying a targeted patch to ${fileName || 'the file'}.` },
-    },
-    code_make_dirs: {
-      ru: { title: 'Создание каталогов', thought: 'Подготавливаю структуру каталогов для следующего шага.' },
-      en: { title: 'Creating directories', thought: 'Preparing the folder structure for the next step.' },
-    },
-    code_run_command: {
-      ru: { title: 'Запуск команды', thought: `Выполняю ${command || 'команду'} для проверки результата.` },
-      en: { title: 'Running command', thought: `Executing ${command || 'a command'} to validate the result.` },
-    },
-    code_install_dependencies: {
-      ru: { title: 'Установка зависимостей', thought: 'Добавляю или обновляю пакеты проекта.' },
-      en: { title: 'Installing dependencies', thought: 'Adding or updating project packages.' },
-    },
-    code_delete_path: {
-      ru: { title: 'Удаление пути', thought: `Удаляю ${fileName || 'файл или папку'} в рамках задачи.` },
-      en: { title: 'Deleting path', thought: `Removing ${fileName || 'a file or folder'} as part of the task.` },
-    },
-    code_move_path: {
-      ru: { title: 'Перемещение пути', thought: `Перемещаю или переименовываю ${fileName || 'элемент проекта'}.` },
-      en: { title: 'Moving path', thought: `Moving or renaming ${fileName || 'a project item'}.` },
-    },
-    code_git_diff: {
-      ru: { title: 'Просмотр diff', thought: 'Проверяю получившийся патч после изменений.' },
-      en: { title: 'Reviewing diff', thought: 'Inspecting the resulting patch after changes.' },
-    },
-  } as Record<string, Record<'ru' | 'en', { title: string; thought: string }>>;
-
-  return fallback[step?.name]?.[language] || {
-    title:
-      language === 'ru'
-        ? String(step?.name || '')
-            .replace(/^code_/, '')
-            .split('_')
-            .filter(Boolean)
-            .join(' ')
-        : String(step?.name || '')
-            .replace(/^code_/, '')
-            .split('_')
-            .filter(Boolean)
-            .map((part: string) => part.charAt(0).toUpperCase() + part.slice(1))
-            .join(' '),
-    thought: language === 'ru' ? 'Выполняю рабочий шаг по задаче.' : 'Executing the next task step.',
-  };
-}
-
-function humanizeStepTitle(step: any, language: 'ru' | 'en') {
-  if (step?.title && !looksLikeBrokenText(step.title)) return step.title;
-  if (!step?.name) return '';
-  return deriveStepCopy(step, language).title;
-}
-
-function normalizeTaskSteps(steps: any[] = [], language: 'ru' | 'en') {
-  const normalizedSteps = steps
-    .filter((step) => !['permission_request', 'permission_decision'].includes(step?.type))
-    .map((step) => {
-      const fallback = deriveStepCopy(step, language);
-      const title = humanizeStepTitle(step, language);
-      const thought =
-        step?.thought && !looksLikeBrokenText(step.thought)
-          ? step.thought
-          : fallback.thought;
-      const status =
-        step?.status ||
-        (step?.type === 'tool_started'
-          ? 'running'
-          : step?.type === 'tool_finished'
-            ? (step?.result?.success === false ? 'failed' : 'completed')
-            : 'running');
-
-      return {
-        ...step,
-        title,
-        thought,
-        status,
-        _identity: buildStepIdentity(step),
-      };
-    })
-    .filter((step) => step.title || (step.thought && String(step.thought).trim().length > 0));
-
-  const mergedSteps: any[] = [];
-  const positions = new Map<string, number>();
-
-  for (const step of normalizedSteps) {
-    const identity = step._identity;
-    if (!identity) {
-      mergedSteps.push(step);
-      continue;
-    }
-
-    const existingIndex = positions.get(identity);
-    if (existingIndex === undefined) {
-      positions.set(identity, mergedSteps.length);
-      mergedSteps.push(step);
-      continue;
-    }
-
-    mergedSteps[existingIndex] = {
-      ...mergedSteps[existingIndex],
-      ...step,
-      _identity: identity,
-    };
-  }
-
-  return mergedSteps.map(({ _identity, ...step }) => step);
-}
-
-function stepStatusLabel(status: string, language: 'ru' | 'en') {
-  const normalized = String(status || '').toLowerCase();
-  if (normalized === 'completed' || normalized === 'success') {
-    return language === 'ru' ? 'готово' : 'done';
-  }
-  if (normalized === 'failed') {
-    return language === 'ru' ? 'ошибка' : 'failed';
-  }
-  if (normalized === 'waiting') {
-    return language === 'ru' ? 'ожидание' : 'waiting';
-  }
-  return language === 'ru' ? 'в работе' : 'running';
-}
-
-function buildStepFeedSummary(steps: any[] = [], language: 'ru' | 'en') {
-  const total = steps.length;
-  const completed = steps.filter((step) => ['completed', 'success'].includes(step.status)).length;
-  const failed = steps.filter((step) => step.status === 'failed').length;
-  const running = steps.filter((step) => step.status === 'running').length;
-  const waiting = steps.filter((step) => step.status === 'waiting').length;
-  const latest = [...steps].reverse().find((step) => step.status === 'running') || steps[steps.length - 1] || null;
-
-  return {
-    headline: failed > 0
-      ? (language === 'ru' ? 'Нужна проверка шага' : 'A step needs attention')
-      : running > 0
-        ? (language === 'ru' ? 'Агент работает над задачей' : 'The agent is working on the task')
-        : waiting > 0
-          ? (language === 'ru' ? 'Ожидается следующее действие' : 'Waiting for the next action')
-          : (language === 'ru' ? 'Шаги по задаче выполнены' : 'Task steps completed'),
-    counter: language === 'ru'
-      ? `${completed} из ${total} шагов завершено`
-      : `${completed} of ${total} steps completed`,
-    detailCta: language === 'ru' ? 'Открыть шаги' : 'Open steps',
-    latest,
-  };
-}
-
-function parseContent(content: string): MessagePart[] {
-  const parts: MessagePart[] = [];
-  // Updated regex to handle optional language identifier and capture cleanly
-  const regex = /```(?:([a-zA-Z0-9]+)\n)?([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let match;
-
-  while ((match = regex.exec(content)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ type: 'text', content: content.slice(lastIndex, match.index) });
-    }
-    // match[1] is language (e.g., 'html' or 'javascript'), match[2] is the actual code
-    parts.push({ type: 'code', content: match[2].trim() });
-    lastIndex = regex.lastIndex;
-  }
-
-  if (lastIndex < content.length) {
-    parts.push({ type: 'text', content: content.slice(lastIndex) });
-  }
-
-  return parts;
-}
+import {
+  buildStepFeedSummary,
+  formatAttachmentSize,
+  inferPreviewBlockType,
+  inferSnippetBlockType,
+  inferSnippetFileName,
+  normalizeTaskSteps,
+  parseContent,
+  shouldRenderCompatibilityStatusCard,
+  stepStatusLabel,
+  taskEvidenceSummary,
+  taskPhaseBadge,
+  taskPhaseHeadline,
+  taskPrimaryDetail,
+} from './chat-view-helpers';
 
 export function ChatView() {
   const { messages, activeWorkspaceId } = useChatStore();
@@ -572,26 +313,175 @@ export function ChatView() {
             {msg.role === 'agent' && (
               <div className="flex flex-col gap-4 w-full">
                 {(() => {
-                  const visibleSteps = normalizeTaskSteps(msg.steps || [], language);
+                  const isCompatibilityMessage =
+                    msg.taskState?.taskEngine
+                      ? msg.taskState.taskEngine === 'compatibility'
+                      : (msg.taskState?.agentLoopVersion || 1) === 2;
+                  const rawVisibleSteps = normalizeTaskSteps(msg.steps || [], language);
+                  const visibleSteps =
+                    isCompatibilityMessage && ['answer', 'clarify'].includes(String(msg.taskState?.mode || ''))
+                      ? []
+                      : rawVisibleSteps;
                   const stepFeed = buildStepFeedSummary(visibleSteps, language);
                   const hasStepIssue = visibleSteps.some((step) => ['failed', 'waiting'].includes(step.status));
-                  const shouldRenderStepFeed =
+                  const shouldRenderCompatibilityDebugSteps =
                     visibleSteps.length > 0 &&
-                    (msg.isStreaming || hasStepIssue || (!msg.blocks?.length && !msg.content?.trim()));
+                    (hasStepIssue ||
+                      msg.taskState?.phase === 'failed' ||
+                      msg.taskState?.phase === 'awaiting_approval');
+                  const shouldRenderStepFeed =
+                    !isCompatibilityMessage &&
+                    !msg.isStreaming &&
+                    visibleSteps.length > 0 &&
+                    (hasStepIssue || (!msg.blocks?.length && !msg.content?.trim()));
+                  const visibleCompatibilityHeadline =
+                    msg.isStreaming && msg.taskState?.phase === 'idle'
+                      ? repairMojibake(language === 'ru' ? 'Подготавливаю следующий шаг' : 'Preparing the next step')
+                      : repairMojibake(taskPhaseHeadline(msg.taskState, language));
+                  const visibleCompatibilityBadge =
+                    msg.isStreaming && msg.taskState?.phase === 'idle'
+                      ? repairMojibake(language === 'ru' ? 'старт' : 'starting')
+                      : repairMojibake(taskPhaseBadge(msg.taskState, language));
+                  const visibleCompatibilityDetail =
+                    msg.isStreaming && msg.taskState?.phase === 'idle' && !msg.taskState?.currentAction
+                      ? repairMojibake(
+                          language === 'ru'
+                            ? 'Агент собирает контекст и подготавливает первый рабочий шаг.'
+                            : 'The agent is gathering context and preparing the first work step.'
+                        )
+                      : taskPrimaryDetail(msg.taskState, language);
+                  const concreteBlockTypes = new Set([
+                    'file_actions',
+                    'code',
+                    'runnable_code',
+                    'markdown',
+                    'diff',
+                    'app_preview',
+                    'validation',
+                    'summary',
+                    'error',
+                  ]);
+                  const hasConcreteArtifactBlocks = Boolean(
+                    msg.blocks?.some((block: any) => concreteBlockTypes.has(block?.type))
+                  );
+                  const hasFileActionBlock = Boolean(
+                    msg.blocks?.some((block: any) => block?.type === 'file_actions')
+                  );
+                  const shouldHideExecutionNarrative =
+                    isCompatibilityMessage &&
+                    ['execute', 'recover'].includes(String(msg.taskState?.mode || '')) &&
+                    hasConcreteArtifactBlocks;
+                  const visibleBlocks = (msg.blocks || []).filter((block: any) => {
+                    if (!block?.type) return false;
+                    if (isCompatibilityMessage && block.type === 'recovery') {
+                      return false;
+                    }
+                    if (shouldHideExecutionNarrative && block.type === 'narrative') {
+                      return false;
+                    }
+                    if (
+                      isCompatibilityMessage &&
+                      hasFileActionBlock &&
+                      ['code', 'runnable_code', 'markdown'].includes(block.type)
+                    ) {
+                      return false;
+                    }
+                    return true;
+                  });
+                  const shouldRenderTypingBubble = msg.isStreaming;
                   return (
                     <>
-                {/* Status Indicator (Activity Visualization) */}
-                {msg.isStreaming && msg.status && msg.status !== 'completed' && msg.status !== 'failed' && visibleSteps.length === 0 && (
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-primary-50 dark:bg-primary-500/10 border border-primary-100 dark:border-primary-500/20 rounded-full w-fit mb-1 shadow-sm slide-in-bottom">
-                    <span className="relative flex h-2 w-2">
-                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary-400 opacity-75"></span>
-                       <span className="relative inline-flex rounded-full h-2 w-2 bg-primary-500"></span>
+                {shouldRenderTypingBubble && (
+                  <div className="flex w-fit items-center gap-1 py-1">
+                    <span className="hidden">
+                      {repairMojibake(language === 'ru' ? 'Агент печатает' : 'Agent is typing')}
                     </span>
-                    <span className="text-xs font-semibold text-primary-700 dark:text-primary-400 uppercase tracking-wider">{msg.status}</span>
+                    <div className="flex items-center gap-1">
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-500 [animation-delay:-0.2s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-500 [animation-delay:-0.1s]" />
+                      <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary-500" />
+                    </div>
                   </div>
                 )}
 
                 {/* Agent Steps */}
+                {isCompatibilityMessage && !msg.isStreaming && msg.taskState && shouldRenderCompatibilityStatusCard(msg.taskState, { isStreaming: msg.isStreaming }) && (
+                  <div className="w-full rounded-2xl border border-gray-200/80 bg-white/80 px-4 py-3.5 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.03]">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-primary-50 text-primary-600 dark:bg-primary-500/10 dark:text-primary-300">
+                          {msg.taskState.phase === 'failed' ? (
+                            <AlertCircle className="h-[18px] w-[18px]" />
+                          ) : msg.taskState.phase === 'completed' ? (
+                            <CheckCircle2 className="h-[18px] w-[18px]" />
+                          ) : msg.taskState.phase === 'awaiting_approval' ? (
+                            <AlertCircle className="h-[18px] w-[18px]" />
+                          ) : (
+                            <Loader2 className={cn('h-[18px] w-[18px]', msg.isStreaming ? 'animate-spin' : '')} />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate text-[0.95rem] font-semibold text-gray-900 dark:text-white">
+                            {visibleCompatibilityHeadline}
+                          </div>
+                          <div className="mt-1 text-[0.84rem] leading-relaxed text-gray-600 dark:text-gray-400">
+                            {visibleCompatibilityDetail}
+                          </div>
+                          {taskEvidenceSummary(msg.taskState, language) &&
+                          msg.taskState.currentAction &&
+                          visibleCompatibilityDetail !== repairMojibake(taskEvidenceSummary(msg.taskState, language) || '') ? (
+                            <div className="mt-1.5 text-[0.78rem] text-gray-500 dark:text-gray-400">
+                              {repairMojibake(taskEvidenceSummary(msg.taskState, language) || '')}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="shrink-0">
+                        <span
+                          className={cn(
+                            "rounded-full px-2.5 py-1 text-[0.68rem] font-bold uppercase tracking-[0.14em]",
+                            msg.taskState.phase === 'failed'
+                              ? 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-300'
+                              : msg.taskState.phase === 'completed'
+                                ? 'bg-green-100 text-green-700 dark:bg-green-500/10 dark:text-green-300'
+                                : msg.taskState.phase === 'awaiting_approval'
+                                  ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'
+                                  : 'bg-primary-50 text-primary-700 dark:bg-primary-500/10 dark:text-primary-300'
+                          )}
+                        >
+                          {visibleCompatibilityBadge}
+                        </span>
+                      </div>
+                    </div>
+                    {shouldRenderCompatibilityDebugSteps ? (
+                      <details className="mt-3 rounded-xl border border-gray-200/70 bg-gray-50/80 px-3 py-2.5 dark:border-white/10 dark:bg-black/20">
+                        <summary className="cursor-pointer list-none text-[0.75rem] font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
+                          {repairMojibake(language === 'ru' ? 'Отладочные шаги' : 'Debug steps')}
+                        </summary>
+                        <div className="mt-2 flex flex-col gap-2">
+                          {visibleSteps.map((step, idx) => (
+                            <div key={`${msg.id}-compat-step-${idx}`} className="rounded-lg bg-white px-3 py-2 text-[0.82rem] shadow-sm dark:bg-white/[0.03]">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-semibold text-gray-900 dark:text-white">
+                                  {repairMojibake(step.title || t('chat.runningStep'))}
+                                </span>
+                                <span className="text-[0.7rem] uppercase tracking-[0.12em] text-gray-400 dark:text-gray-500">
+                                  {repairMojibake(stepStatusLabel(step.status, language))}
+                                </span>
+                              </div>
+                              {step.thought ? (
+                                <div className="mt-1 text-[0.8rem] text-gray-600 dark:text-gray-400">
+                                  {repairMojibake(step.thought)}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
+                )}
+
                 {shouldRenderStepFeed && (
                   <details
                     className="w-full rounded-2xl border border-gray-200/80 bg-white/70 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.03]"
@@ -613,7 +503,11 @@ export function ChatView() {
                             {repairMojibake(stepFeed.headline)}
                           </div>
                           <div className="mt-0.5 truncate text-[0.78rem] text-gray-500 dark:text-gray-400">
-                            {repairMojibake(stepFeed.latest?.thought || stepFeed.counter)}
+                            {repairMojibake(
+                              msg.isStreaming && stepFeed.latest?.status === 'running'
+                                ? (stepFeed.latest?.thought || stepFeed.counter)
+                                : stepFeed.counter
+                            )}
                           </div>
                         </div>
                       </div>
@@ -684,10 +578,14 @@ export function ChatView() {
                 )}
 
                 {/* Structured blocks are the primary rendering path. Fallback to legacy text parsing only when blocks are absent. */}
-                {msg.blocks && msg.blocks.length > 0 ? (
-                  msg.blocks.map((block: any, i: number) => (
+                {visibleBlocks.length > 0 ? (
+                  visibleBlocks.map((block: any, i: number) => (
                     <div key={i} className="w-full fade-in">
-                      <BlockRenderer block={block} messageId={msg.id} />
+                      <BlockRenderer
+                        block={block}
+                        messageId={msg.id}
+                        workspaceId={msg.taskState?.workspaceId || activeWorkspaceId || undefined}
+                      />
                     </div>
                   ))
                 ) : (
@@ -700,7 +598,15 @@ export function ChatView() {
                       )
                     ) : (
                       <div key={idx} className="w-full fade-in">
-                        <BlockRenderer block={{ type: 'runnable_code', code: part.content }} messageId={msg.id} />
+                        <BlockRenderer
+                          block={{
+                            type: inferSnippetBlockType(part.language, part.content),
+                            code: part.content,
+                            file: inferSnippetFileName(part.language, part.content)
+                          }}
+                          messageId={msg.id}
+                          workspaceId={msg.taskState?.workspaceId || activeWorkspaceId || undefined}
+                        />
                       </div>
                     )
                   ))
@@ -723,7 +629,8 @@ export function ChatView() {
                                 file: preview.name,
                                 path: preview.path
                           }} 
-                          messageId={msg.id} 
+                          messageId={msg.id}
+                          workspaceId={msg.taskState?.workspaceId || activeWorkspaceId || undefined}
                         />
                       </div>
                    </div>

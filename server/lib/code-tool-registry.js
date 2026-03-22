@@ -24,8 +24,8 @@ const TOOL_TAGS = {
     code_read_file: ["read", "inspect", "open", "file", "source", "content"],
     code_read_files: ["read", "inspect", "multiple", "batch", "files", "context"],
     code_suggest_commands: ["commands", "scripts", "test", "build", "lint", "dev", "package", "run"],
-    code_write_file: ["create", "write", "replace", "file", "source", "implement"],
-    code_write_file_lines: ["create", "write", "html", "css", "js", "markup", "source", "implement"],
+    code_write_file: ["create", "write", "replace", "file", "source", "implement", "html", "css", "js", "full-file"],
+    code_write_file_lines: ["write", "line", "rewrite", "repair", "ordered", "lines", "source"],
     code_create_single_page_site: ["site", "landing", "website", "token", "page", "html"],
     code_make_dirs: ["mkdir", "folders", "directories", "scaffold", "structure", "create"],
     code_replace_text: ["replace", "edit", "update", "text", "patch", "modify"],
@@ -132,7 +132,7 @@ function scoreTool(query, tool) {
     if (intent.external && tool.name === "code_web_search") {
         score += 28;
     }
-    if (intent.web && ["code_write_file_lines"].includes(tool.name)) {
+    if (intent.web && ["code_write_file"].includes(tool.name)) {
         score += 10;
     }
 
@@ -202,8 +202,37 @@ function isPackageMutationCommand(command) {
     );
 }
 
+function normalizeCommand(command) {
+    return String(command || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLowerCase();
+}
+
+function isSafeProjectVerifyCommand(command, context) {
+    const normalized = normalizeCommand(command);
+    if (!normalized) {
+        return false;
+    }
+
+    const executionContract = context?.executionContract || {};
+    const verifyCommands = Array.isArray(executionContract.verifyCommands)
+        ? executionContract.verifyCommands
+        : [];
+
+    if (verifyCommands.some((candidate) => normalizeCommand(candidate) === normalized)) {
+        return true;
+    }
+
+    return /^\s*(?:npm|pnpm|yarn|bun)\s+run\s+(?:check|lint|test|build|verify|typecheck)\b/i.test(command);
+}
+
 function shouldRequireCommandApproval(command, context) {
     if (context.settings?.fullAccess) {
+        return false;
+    }
+
+    if (isSafeProjectVerifyCommand(command, context)) {
         return false;
     }
 
@@ -215,11 +244,11 @@ export class CodeToolRegistry {
         this.tools = new Map();
         this.hooks = hooks;
         this.activeProfiles = new Map();
+        this.executionContracts = new Map();
         this.policy = { 
             allowWebSearch: true,
             requireApproval: new Set([
                 "code_delete_path",
-                "code_run_command",
                 "code_install_dependencies"
             ])
         };
@@ -288,6 +317,27 @@ export class CodeToolRegistry {
         this.activeProfiles.delete(chatId);
     }
 
+    getChatExecutionContract(chatId) {
+        if (!chatId) {
+            return null;
+        }
+        return this.executionContracts.get(chatId) || null;
+    }
+
+    setChatExecutionContract(chatId, contract) {
+        if (!chatId || !contract) {
+            return;
+        }
+        this.executionContracts.set(chatId, contract);
+    }
+
+    clearChatExecutionContract(chatId) {
+        if (!chatId) {
+            return;
+        }
+        this.executionContracts.delete(chatId);
+    }
+
     getAll(chatId) {
         return this.filterByPolicy(Array.from(this.tools.values()).map((entry) => entry.tool), chatId);
     }
@@ -346,45 +396,18 @@ export class CodeToolRegistry {
 
     selectToolsForQuery(query, chatId) {
         const allTools = this.getAll(chatId);
-        const ranked = allTools
-            .map((tool) => ({ tool, score: scoreTool(query, tool) }))
-            .sort((left, right) => right.score - left.score || left.tool.name.localeCompare(right.tool.name));
+        const prioritized = [];
+        const remaining = [];
 
-        const selected = [];
-        const intent = inferIntent(query);
-
-        for (const entry of ranked) {
-            if (entry.score <= 0 && !ALWAYS_INCLUDE.has(entry.tool.name)) {
-                continue;
-            }
-            if (selected.length >= 10) {
-                break;
-            }
-            selected.push(entry.tool);
-        }
-
-        if (intent.create || intent.edit) {
-            for (const name of ["code_patch_file", "code_insert_block", "code_write_file", "code_write_file_lines", "code_write_json"]) {
-                selected.push(this.tools.get(name)?.tool);
+        for (const tool of allTools) {
+            if (ALWAYS_INCLUDE.has(tool.name)) {
+                prioritized.push(tool);
+            } else {
+                remaining.push(tool);
             }
         }
 
-        if (intent.run) {
-            selected.push(this.tools.get("code_run_command")?.tool);
-            selected.push(this.tools.get("code_suggest_commands")?.tool);
-            selected.push(this.tools.get("code_run_check_suite")?.tool);
-        }
-
-        if (intent.git) {
-            selected.push(this.tools.get("code_git_status")?.tool);
-            selected.push(this.tools.get("code_git_diff")?.tool);
-        }
-
-        for (const name of ALWAYS_INCLUDE) {
-            selected.push(this.tools.get(name)?.tool);
-        }
-
-        return uniqueTools(selected);
+        return uniqueTools([...prioritized, ...remaining]);
     }
 
     async getForContextWithRAG(query, _queryEmbedding, isGroup, toolLimit, chatId) {
@@ -671,7 +694,11 @@ export class CodeToolRegistry {
         const executionContext = {
             ...context,
             toolCall,
-            command: params.command
+            command: params.command,
+            executionContract:
+                context?.executionContract ||
+                this.getChatExecutionContract(context?.chatId) ||
+                null
         };
         const approval = this.shouldRequireApproval(toolCall.name, executionContext, profile);
         if (approval.required) {

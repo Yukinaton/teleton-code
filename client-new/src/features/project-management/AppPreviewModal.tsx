@@ -31,7 +31,7 @@ export function AppPreviewModal() {
           "bg-white dark:bg-[#0a0a0a] shadow-[0_32px_128px_-16px_rgba(0,0,0,0.4)] flex flex-col overflow-hidden transform transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] relative z-10",
           previewMaximized 
             ? "w-full h-full rounded-2xl border border-gray-200/50 dark:border-gray-800/50" 
-            : "w-[85vw] h-[75vh] rounded-3xl border border-gray-200/50 dark:border-gray-800/50"
+            : "w-[min(94vw,1440px)] h-[88vh] rounded-3xl border border-gray-200/50 dark:border-gray-800/50"
         )}
       >
         <div className="flex-1 bg-white flex items-center justify-center relative">

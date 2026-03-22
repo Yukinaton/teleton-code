@@ -87,6 +87,8 @@ export const useChatStore = create<ExtendedChatState>()(
                 id: m.id,
                 role: m.role,
                 content: m.text || m.content,
+                taskId: m.taskId || null,
+                taskState: m.taskState || null,
                 timestamp: m.createdAt ? new Date(m.createdAt).getTime() : m.timestamp,
                 attachments: m.attachments || [],
                 blocks: m.blocks || []
@@ -199,6 +201,8 @@ export const useChatStore = create<ExtendedChatState>()(
           state.addMessage({
             id: assistantMsgId,
             role: 'agent',
+            taskId,
+            taskState: msgData.data.task || null,
             content: initialAssistantMessage?.text || '',
             timestamp: Date.now(),
             blocks: initialAssistantMessage?.blocks || [],
@@ -207,73 +211,112 @@ export const useChatStore = create<ExtendedChatState>()(
             status: initialAssistantMessage ? undefined : translate(layoutState.language, 'chat.runningStep')
           });
 
+          const updateTaskMessage = (
+            updater: (message: any) => any,
+            options: { isStreaming?: boolean } = {}
+          ) => {
+            set((s) => {
+              const newMessages = [...s.messages];
+              const idx = newMessages.findLastIndex((m: any) => m.role === 'agent' && m.taskId === taskId);
+
+              if (idx === -1) {
+                return options.isStreaming === undefined ? s : { ...s, isStreaming: options.isStreaming };
+              }
+
+              newMessages[idx] = updater(newMessages[idx]);
+              return {
+                messages: newMessages,
+                isStreaming: options.isStreaming === undefined ? s.isStreaming : options.isStreaming,
+              };
+            });
+          };
+
+          const findLatestAgentMessage = (messages: any[] = []) =>
+            [...messages]
+              .reverse()
+              .find((message: any) => message.role === 'agent' && message.taskId === taskId) || null;
+
+          const resolveAgentText = (agentMsg: any, task: any, fallback = '') =>
+            agentMsg?.text ||
+            agentMsg?.content ||
+            task?.response ||
+            task?.resultSummary ||
+            fallback;
+
+          const applyTerminalTaskEvent = (data: any, options: { invalidateWorkspaceFiles?: boolean } = {}) => {
+            const agentMsg = data.assistantMessage || null;
+            const task = data.task || null;
+
+            if (options.invalidateWorkspaceFiles) {
+              queryClient.invalidateQueries({ queryKey: ['workspace-files'] });
+            }
+
+            updateTaskMessage((current) => ({
+              ...current,
+              content: resolveAgentText(agentMsg, task, current.content || ''),
+              blocks: agentMsg?.blocks || current.blocks || [],
+              isStreaming: false,
+              status: undefined,
+              steps: task?.steps || current.steps,
+              taskState: task || agentMsg?.taskState || current.taskState || null,
+              taskId,
+            }), { isStreaming: false });
+          };
+
           const eventSource = new EventSource(`/api/tasks/${taskId}/stream`);
+
+          eventSource.addEventListener('task.accepted', (event: any) => {
+            const data = JSON.parse(event.data);
+            const task = data.task;
+            const snapshotMessages = Array.isArray(data.messages) ? data.messages : [];
+            const latestAgentMessage = findLatestAgentMessage(snapshotMessages);
+
+            updateTaskMessage((current) => ({
+              ...current,
+              content: resolveAgentText(latestAgentMessage, task, current.content),
+              blocks: latestAgentMessage?.blocks || current.blocks || [],
+              isStreaming: true,
+              status: task?.status || translate(layoutState.language, 'chat.runningStep'),
+              steps: task?.steps || current.steps,
+              taskState: task || latestAgentMessage?.taskState || current.taskState || null,
+              taskId,
+            }), { isStreaming: true });
+          });
 
           eventSource.addEventListener('task.snapshot', (event: any) => {
             const data = JSON.parse(event.data);
             const task = data.task;
             const snapshotMessages = Array.isArray(data.messages) ? data.messages : [];
-            const latestAgentMessage = [...snapshotMessages]
-              .reverse()
-              .find((message: any) => message.role === 'agent');
+            const latestAgentMessage = findLatestAgentMessage(snapshotMessages);
 
-            if (!latestAgentMessage) {
-              set({ isStreaming: task?.status === 'running' });
-              return;
-            }
-
-            set((s) => {
-              const newMessages = [...s.messages];
-              const idx = newMessages.findLastIndex((m) => m.role === 'agent');
-              if (idx !== -1) {
-                newMessages[idx] = {
-                  ...newMessages[idx],
-                  content: latestAgentMessage.text || latestAgentMessage.content || '',
-                  blocks: latestAgentMessage.blocks || [],
-                  isStreaming: task?.status === 'running',
-                  status: task?.status === 'running' ? newMessages[idx].status : undefined,
-                  steps: task?.steps || newMessages[idx].steps,
-                };
-              }
-              return {
-                messages: newMessages,
-                isStreaming: task?.status === 'running',
-              };
-            });
+            updateTaskMessage((current) => ({
+              ...current,
+              content: resolveAgentText(latestAgentMessage, task, current.content || ''),
+              blocks: latestAgentMessage?.blocks || current.blocks || [],
+              isStreaming: task?.status === 'running',
+              status: task?.status === 'running' ? (current.status || translate(layoutState.language, 'chat.runningStep')) : undefined,
+              steps: task?.steps || current.steps,
+              taskState: task || latestAgentMessage?.taskState || current.taskState || null,
+              taskId,
+            }), { isStreaming: task?.status === 'running' });
           });
           
           eventSource.addEventListener('task.step', (event: any) => {
             const data = JSON.parse(event.data);
             const task = data.task;
-            if (task.status) {
-              get().updateLastMessageStatus(task.status);
-            }
-            if (task.steps) {
-              (get() as any).updateLastMessageSteps(task.steps);
-            }
+            updateTaskMessage((current) => ({
+              ...current,
+              status: task?.status || current.status,
+              steps: task?.steps || current.steps,
+              isStreaming: task?.status === 'running',
+              taskState: task || current.taskState || null,
+              taskId,
+            }), { isStreaming: task?.status === 'running' });
           });
 
           eventSource.addEventListener('task.completed', (event: any) => {
             const data = JSON.parse(event.data);
-            const agentMsg = data.assistantMessage;
-            
-            queryClient.invalidateQueries({ queryKey: ['workspace-files'] });
-            
-            set((s) => {
-              const newMessages = [...s.messages];
-              const idx = newMessages.findLastIndex(m => m.role === 'agent');
-              if (idx !== -1) {
-                newMessages[idx] = {
-                  ...newMessages[idx],
-                  content: agentMsg.text,
-                  blocks: agentMsg.blocks,
-                  isStreaming: false,
-                  status: undefined,
-                  steps: data.task?.steps || newMessages[idx].steps,
-                };
-              }
-              return { messages: newMessages, isStreaming: false };
-            });
+            applyTerminalTaskEvent(data, { invalidateWorkspaceFiles: true });
             eventSource.close();
           });
 
@@ -281,42 +324,48 @@ export const useChatStore = create<ExtendedChatState>()(
             const data = JSON.parse(event.data);
             const agentMsg = data.assistantMessage;
 
-            set((s) => {
-              const newMessages = [...s.messages];
-              const idx = newMessages.findLastIndex(m => m.role === 'agent');
-              if (idx !== -1 && agentMsg) {
-                newMessages[idx] = {
-                  ...newMessages[idx],
-                  content: agentMsg.text,
-                  blocks: agentMsg.blocks,
-                  isStreaming: false,
-                  status: undefined,
-                  steps: data.task?.steps || newMessages[idx].steps,
-                };
-              }
-              return { messages: newMessages, isStreaming: false };
-            });
+            if (agentMsg) {
+              updateTaskMessage((current) => ({
+                ...current,
+                content: agentMsg.text,
+                blocks: agentMsg.blocks,
+                isStreaming: false,
+                status: undefined,
+                steps: data.task?.steps || current.steps,
+                taskState: data.task || agentMsg.taskState || current.taskState || null,
+                taskId,
+              }), { isStreaming: false });
+            } else {
+              set({ isStreaming: false });
+            }
+          });
+
+          eventSource.addEventListener('task.partial', (event: any) => {
+            const data = JSON.parse(event.data);
+            applyTerminalTaskEvent(data, { invalidateWorkspaceFiles: true });
+            eventSource.close();
+          });
+
+          eventSource.addEventListener('task.clarification_required', (event: any) => {
+            const data = JSON.parse(event.data);
+            applyTerminalTaskEvent(data);
+            eventSource.close();
           });
 
           eventSource.addEventListener('task.failed', (event: any) => {
             const data = JSON.parse(event.data);
             const agentMsg = data.assistantMessage;
             if (agentMsg) {
-              set((s) => {
-                const newMessages = [...s.messages];
-                const idx = newMessages.findLastIndex(m => m.role === 'agent');
-                if (idx !== -1) {
-                  newMessages[idx] = {
-                    ...newMessages[idx],
-                    content: agentMsg.text,
-                    blocks: agentMsg.blocks,
-                    isStreaming: false,
-                    status: undefined,
-                    steps: data.task?.steps || newMessages[idx].steps,
-                  };
-                }
-                return { messages: newMessages, isStreaming: false };
-              });
+              updateTaskMessage((current) => ({
+                ...current,
+                content: agentMsg.text,
+                blocks: agentMsg.blocks,
+                isStreaming: false,
+                status: undefined,
+                steps: data.task?.steps || current.steps,
+                taskState: data.task || agentMsg.taskState || current.taskState || null,
+                taskId,
+              }), { isStreaming: false });
             } else {
               state.updateLastMessage(data.error || 'Task failed');
               set({ isStreaming: false });

@@ -30,7 +30,7 @@ export async function handleApiRequest(request, response, context) {
     
     // Ping
     if (method === "GET" && path === "/api/debug/ping") {
-        return json(response, 200, { success: true, data: { status: "pong", version: "next-gen-refactor-v2", time: new Date().toISOString() } });
+        return json(response, 200, { success: true, data: { status: "pong", version: "0.1.2", time: new Date().toISOString() } });
     }
 
     // Runtime Status
@@ -45,8 +45,9 @@ export async function handleApiRequest(request, response, context) {
             success: true,
             data: {
                 runtimeLoaded: runtime.loaded,
-                workspaceBaseRoot: runtime.workspaceBaseRoot,
-                capabilities: runtime.capabilities
+                profile: runtime.profile || "teleton-code",
+                webSearch: runtime.webSearch || null,
+                enabledModules: Array.isArray(runtime.enabledModules) ? runtime.enabledModules : []
             }
         });
     }
@@ -84,8 +85,22 @@ export async function handleApiRequest(request, response, context) {
 
     const wsDiagnosticsMatch = path.match(/^\/api\/workspaces\/([^/]+)\/diagnostics$/);
     if (wsDiagnosticsMatch && method === "GET") {
-        const files = (await import("./workspace-utils.js")).listWorkspaceTree(config.runtime.workspaceBaseRoot, "", 3);
-        return json(response, 200, { success: true, data: { files } });
+        const workspace = stateStore.getWorkspace(wsDiagnosticsMatch[1]);
+        if (!workspace) {
+            return notFound(response, "Workspace not found");
+        }
+        const files = (await import("./workspace-utils.js")).listWorkspaceTree(workspace.path, "", 3);
+        return json(response, 200, {
+            success: true,
+            data: {
+                workspace: {
+                    id: workspace.id,
+                    name: workspace.name,
+                    path: workspace.path
+                },
+                files
+            }
+        });
     }
 
     const wsFileMatch = path.match(/^\/api\/workspaces\/([^/]+)\/file$/);

@@ -24,6 +24,9 @@ export type BlockType =
 export interface ChatBlock {
   id?: string;
   type: BlockType;
+  taskId?: string | null;
+  workspaceId?: string | null;
+  recoveryAvailable?: boolean;
   content?: string;
   code?: string;
   file?: string;
@@ -68,11 +71,33 @@ export interface TaskStep {
   timestamp: number;
 }
 
+export interface ChatTaskState {
+  id: string;
+  workspaceId?: string | null;
+  taskEngine?: 'standard' | 'compatibility';
+  agentLoopVersion?: number;
+  status: string | null;
+  mode: 'answer' | 'clarify' | 'inspect' | 'execute' | 'review' | 'recover' | null;
+  phase: 'idle' | 'inspecting' | 'editing' | 'verifying' | 'awaiting_approval' | 'completed' | 'failed';
+  currentAction?: string | null;
+  resultSummary?: string | null;
+  approvalScope?: 'shell' | 'destructive' | null;
+  evidenceState?: 'none' | 'tool_confirmed' | 'verify_passed' | 'verify_failed' | 'claim_mismatch';
+  verify?: {
+    status?: string;
+    reason?: string;
+    tool?: string;
+    command?: string;
+  } | null;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'agent';
   content: string;
   timestamp: number;
+  taskId?: string | null;
+  taskState?: ChatTaskState | null;
   attachments?: ChatAttachment[];
   blocks?: ChatBlock[];
   isStreaming?: boolean;

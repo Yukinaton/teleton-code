@@ -1,6 +1,6 @@
 # Configuration
 
-Teleton Code uses a small JSON config file and a few runtime environment variables.
+Teleton Code uses a small JSON config file, a few CLI flags, and runtime environment variables.
 
 ## Config File
 
@@ -46,6 +46,20 @@ If the configured pair is unavailable, Teleton Code automatically chooses the ne
 
 In the current release, Teleton Code is intentionally local-only.
 
+## CLI Flags
+
+```text
+teleton-code start [--webui] [--host 127.0.0.1] [--port 9999] [--preview-port 10000]
+```
+
+Additional overrides:
+
+- `--teleton-home <path>`
+- `--teleton-package <path>`
+- `--auth-token <token>`
+
+`--webui` is a Teleton-style alias for the local IDE WebUI flow. It does not start the Teleton Agent WebUI itself.
+
 ## Environment Variables
 
 | Variable | Description |
@@ -75,7 +89,6 @@ Teleton Code stores runtime data under the Teleton home, not in the repository:
 ```text
 ~/.teleton/
   config.yaml
-  memory.db
   workspace/
     projects/
     ide/
@@ -90,15 +103,54 @@ Teleton Code stores runtime data under the Teleton home, not in the repository:
 ### What lives where
 
 - `workspace/projects/` contains project files
-- `workspace/ide/code-agent/` contains IDE-specific agent markdown files
-- `workspace/ide/projects/` and `workspace/ide/chats/` contain IDE metadata
+- `workspace/ide/code-agent/` contains IDE-specific agent workspace files
+- `workspace/ide/projects/` contains IDE project metadata
+- `workspace/ide/chats/` contains IDE chat metadata
 - `ide/teleton-code/state.json` stores local IDE service state
 
-## Auth Artifacts
+## Project Instructions
 
-The running service writes the current startup metadata to:
+For new chats, Teleton Code loads instruction documents in this order:
+
+1. `<project-root>/AGENTS.md` (if present)
+2. `~/.teleton/workspace/ide/code-agent/AGENTS.md`
+3. `<project-root>/CLAUDE.md` (if present)
+4. `~/.teleton/workspace/ide/code-agent/CLAUDE.md`
+5. known project verification commands from instruction files and from `package.json` scripts
+
+System instruction files are created once in the Teleton workspace and are shared across projects.
+Teleton Code does not auto-create `AGENTS.md` or `CLAUDE.md` inside project folders.
+
+## Verification Commands
+
+The standard task engine derives safe project verification commands from:
+
+- active instruction files from project root and Teleton system fallback
+- `package.json` scripts such as `check`, `lint`, `test`, `build`, `verify`, and `typecheck`
+
+These commands can run without approval when they stay inside the project verification contract.
+
+## Web Search
+
+Web search availability follows the Teleton Agent configuration:
+
+- if `tavily_api_key` is present in Teleton config, web search is available to the IDE code mode
+- if it is missing, web search remains disabled in the IDE
+
+## Auth And Runtime Artifacts
+
+The running service writes current startup metadata to:
 
 - `logs/current-auth-url.txt`
 - `logs/current-runtime.json`
 
-These files always describe the current running instance and should be preferred over old console logs.
+These files describe the current running instance and should be preferred over old console logs.
+
+## Preview Isolation
+
+Preview runs on a separate local origin from the IDE itself:
+
+- IDE service: default `127.0.0.1:9999`
+- Preview service: default `127.0.0.1:10000`
+
+This keeps runnable browser output separated from the IDE origin.

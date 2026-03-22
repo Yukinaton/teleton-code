@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { defaultState as buildDefaultState } from "./projects-store.js";
 import { nowIso } from "./state-helpers.js";
+import { resolveTaskEngine, STANDARD_TASK_ENGINE } from "../../../application/code-agent/task-engine.js";
 
 function recoverStaleRunningState(state) {
     state.tasks = (state.tasks || []).map((task) =>
@@ -25,6 +26,40 @@ function recoverStaleRunningState(state) {
                   updatedAt: nowIso()
               }
     );
+}
+
+function ensureLoopVersions(state) {
+    state.sessions = (state.sessions || []).map((session) => {
+        const { agentLoopVersion, ...rest } = session || {};
+        return {
+            ...rest,
+            taskEngine: resolveTaskEngine(session, STANDARD_TASK_ENGINE)
+        };
+    });
+
+    state.tasks = (state.tasks || []).map((task) => {
+        const session = state.sessions.find((entry) => entry.id === task.sessionId);
+        const { agentLoopVersion, ...rest } = task || {};
+        return {
+            ...rest,
+            taskEngine: resolveTaskEngine(task, resolveTaskEngine(session, STANDARD_TASK_ENGINE)),
+            phase: task?.phase || "idle",
+            stage: task?.stage || null,
+            currentAction: task?.currentAction || null,
+            resultSummary: task?.resultSummary || null,
+            approvalScope: task?.approvalScope || null,
+            evidenceState: task?.evidenceState || "none",
+            verify: task?.verify || null,
+            mode: task?.mode || null,
+            approval: task?.approval || null,
+            evidence: task?.evidence || null,
+            scope: task?.scope || null,
+            repairAttempts: Number.isInteger(task?.repairAttempts) ? task.repairAttempts : 0,
+            changedFiles: Array.isArray(task?.changedFiles) ? task.changedFiles : [],
+            failures: Array.isArray(task?.failures) ? task.failures : [],
+            turn: task?.turn || null
+        };
+    });
 }
 
 function normalizeWorkspaceKinds(state, config) {
@@ -141,6 +176,7 @@ function ensureWorkspaceSessions(state) {
             id: sessionId,
             workspaceId: state.activeWorkspaceId,
             title: "Code Session",
+            taskEngine: STANDARD_TASK_ENGINE,
             status: "idle",
             createdAt: nowIso(),
             updatedAt: nowIso()
@@ -157,6 +193,7 @@ function ensureWorkspaceSessions(state) {
                 id: sessionId,
                 workspaceId: workspace.id,
                 title: "Code Session",
+                taskEngine: STANDARD_TASK_ENGINE,
                 status: "idle",
                 createdAt: nowIso(),
                 updatedAt: nowIso()
@@ -222,6 +259,7 @@ export function loadStateSnapshot(path, config) {
     dedupeWorkspaceIds(state);
     syncWorkspaceFolders(state, config);
     pruneLegacyBootstrapSandbox(state);
+    ensureLoopVersions(state);
     ensureActiveSelection(state, fallback);
     ensureWorkspaceSessions(state);
     recoverStaleRunningState(state);

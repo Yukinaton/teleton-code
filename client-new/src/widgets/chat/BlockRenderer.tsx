@@ -17,6 +17,8 @@ import { buildWorkspacePreviewUrl, resolvePreviewUrl } from '../../shared/utils/
 interface Block {
   type: string;
   text?: string;
+  workspaceId?: string | null;
+  recoveryAvailable?: boolean;
   files?: Array<string | { name: string; path?: string; status?: string }>;
   items?: string[];
   steps?: string[];
@@ -40,19 +42,43 @@ interface Block {
 interface BlockRendererProps {
   block: Block;
   messageId?: string;
+  workspaceId?: string | null;
 }
 
 // Custom syntax highlighting is replaced by Monaco Editor
 
 function inferWorkspaceBlockType(path = ''): 'markdown' | 'code' | 'runnable_code' {
   const normalized = String(path || '').toLowerCase();
-  if (normalized.endsWith('.md')) {
+  if (normalized.endsWith('.md') || normalized.endsWith('.txt')) {
     return 'markdown';
   }
   if (normalized.endsWith('.html') || normalized.endsWith('.htm')) {
     return 'runnable_code';
   }
   return 'code';
+}
+
+function normalizeDisplaySource(code = '', blockType: string, filePath = '') {
+  if (blockType === 'markdown') {
+    return String(code || '');
+  }
+
+  const source = String(code || '');
+  const actualNewlines = (source.match(/\n/g) || []).length;
+  const escapedNewlines = (source.match(/\\n/g) || []).length;
+  const normalizedPath = String(filePath || '').toLowerCase();
+  const isSourceLike = /\.(html?|css|js|jsx|ts|tsx|json)$/i.test(normalizedPath) || ['code', 'runnable_code'].includes(blockType);
+
+  if (!isSourceLike || escapedNewlines < 3 || actualNewlines > 2) {
+    return source;
+  }
+
+  return source
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
 }
 
 function extractFileLikePath(value = '') {
@@ -81,56 +107,83 @@ function renderRichText(text?: string) {
   const source = repairMojibake(String(text || '')).replace(/\r\n/g, '\n').trim();
   if (!source) return null;
 
+  const segments = source.split(/(```[\w-]*\n[\s\S]*?```)/g).filter(Boolean);
+  const renderNarrativeSection = (section: string, prefix: string) =>
+    section.split('\n').map((line, index) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return <div key={`${prefix}-space-${index}`} className="h-2" />;
+      }
+
+      if (trimmed.startsWith('# ')) {
+        return <h1 key={`${prefix}-h1-${index}`} className="text-[1.35rem]">{renderInlineText(trimmed.slice(2))}</h1>;
+      }
+
+      if (trimmed.startsWith('## ')) {
+        return <h2 key={`${prefix}-h2-${index}`} className="text-[1.1rem]">{renderInlineText(trimmed.slice(3))}</h2>;
+      }
+
+      if (trimmed.startsWith('### ')) {
+        return <h3 key={`${prefix}-h3-${index}`} className="text-[0.98rem]">{renderInlineText(trimmed.slice(4))}</h3>;
+      }
+
+      if (trimmed.startsWith('> ')) {
+        return <blockquote key={`${prefix}-quote-${index}`}>{renderInlineText(trimmed.slice(2))}</blockquote>;
+      }
+
+      if (/^\d+\.\s/.test(trimmed)) {
+        const [, marker, body] = trimmed.match(/^(\d+\.)\s(.+)$/) || [];
+        return (
+          <div key={`${prefix}-ordered-${index}`} className="my-2 flex items-start gap-3">
+            <span className="w-7 shrink-0 text-right text-[0.78rem] font-semibold text-primary-600 dark:text-primary-400">{marker}</span>
+            <div className="min-w-0 flex-1"><p>{renderInlineText(body || trimmed)}</p></div>
+          </div>
+        );
+      }
+
+      if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        return (
+          <div key={`${prefix}-bullet-${index}`} className="my-2 flex items-start gap-3">
+            <span className="mt-[0.72rem] inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-primary-500" />
+            <div className="min-w-0 flex-1"><p>{renderInlineText(trimmed.slice(2))}</p></div>
+          </div>
+        );
+      }
+
+      return <p key={`${prefix}-text-${index}`}>{renderInlineText(trimmed)}</p>;
+    });
+
   return (
     <div className="agent-copy">
-      {source.split('\n').map((line, index) => {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          return <div key={index} className="h-2" />;
-        }
-
-        if (trimmed.startsWith('# ')) {
-          return <h1 key={index} className="text-[1.35rem]">{renderInlineText(trimmed.slice(2))}</h1>;
-        }
-
-        if (trimmed.startsWith('## ')) {
-          return <h2 key={index} className="text-[1.1rem]">{renderInlineText(trimmed.slice(3))}</h2>;
-        }
-
-        if (trimmed.startsWith('### ')) {
-          return <h3 key={index} className="text-[0.98rem]">{renderInlineText(trimmed.slice(4))}</h3>;
-        }
-
-        if (trimmed.startsWith('> ')) {
-          return <blockquote key={index}>{renderInlineText(trimmed.slice(2))}</blockquote>;
-        }
-
-        if (/^\d+\.\s/.test(trimmed)) {
-          const [, marker, body] = trimmed.match(/^(\d+\.)\s(.+)$/) || [];
+      {segments.map((segment, index) => {
+        const codeFence = segment.match(/^```([\w-]*)\n([\s\S]*?)```$/);
+        if (codeFence) {
+          const languageLabel = codeFence[1]?.trim();
+          const code = codeFence[2]?.replace(/\n$/, '') || '';
           return (
-            <div key={index} className="my-2 flex items-start gap-3">
-              <span className="w-7 shrink-0 text-right text-[0.78rem] font-semibold text-primary-600 dark:text-primary-400">{marker}</span>
-              <div className="min-w-0 flex-1"><p>{renderInlineText(body || trimmed)}</p></div>
+            <div
+              key={`code-segment-${index}`}
+              className="my-4 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-[#0a0a0a]"
+            >
+              {languageLabel ? (
+                <div className="border-b border-gray-200 bg-gray-50 px-4 py-2 text-[0.72rem] font-bold uppercase tracking-wider text-gray-500 dark:border-gray-800 dark:bg-[#1a1b1e] dark:text-gray-400">
+                  {languageLabel}
+                </div>
+              ) : null}
+              <pre className="overflow-x-auto px-4 py-3 text-[0.84rem] leading-relaxed text-gray-800 dark:text-gray-200">
+                <code>{code}</code>
+              </pre>
             </div>
           );
         }
 
-        if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-          return (
-            <div key={index} className="my-2 flex items-start gap-3">
-              <span className="mt-[0.72rem] inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-primary-500" />
-              <div className="min-w-0 flex-1"><p>{renderInlineText(trimmed.slice(2))}</p></div>
-            </div>
-          );
-        }
-
-        return <p key={index}>{renderInlineText(trimmed)}</p>;
+        return renderNarrativeSection(segment, `narrative-${index}`);
       })}
     </div>
   );
 }
 
-export function BlockRenderer({ block, messageId }: BlockRendererProps) {
+export function BlockRenderer({ block, messageId, workspaceId }: BlockRendererProps) {
   const [viewMode, setViewMode] = useState<Record<string, 'code' | 'preview'>>({});
   const [isEditing, setIsEditing] = useState<Record<string, boolean>>({});
   const { theme: globalTheme, showToast, language, previewBaseUrl } = useLayoutStore();
@@ -139,13 +192,16 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
   const fetchMessages = useChatStore((state) => state.fetchMessages);
   const activeSessionId = useChatStore((state) => state.activeSessionId);
   const activeWorkspaceId = useChatStore((state) => state.activeWorkspaceId);
+  const setActiveWorkspace = useChatStore((state) => state.setActiveWorkspace);
   const [editedCode, setEditedCode] = useState<string | null>(null);
   const [isCopied, setIsCopied] = useState<Record<string, boolean>>({});
   const [expandedFiles, setExpandedFiles] = useState<Record<string, boolean>>({});
   const [expandedAppPreviews, setExpandedAppPreviews] = useState<Record<string, boolean>>({});
   const [workspaceFilePreviews, setWorkspaceFilePreviews] = useState<Record<string, { path: string; name: string; type: 'markdown' | 'code' | 'runnable_code'; content: string }>>({});
   const [approvalPending, setApprovalPending] = useState<string | null>(null);
+  const [approvalResolved, setApprovalResolved] = useState<'accept' | 'reject' | 'accept_all' | 'reject_all' | null>(null);
   const [recoveryPending, setRecoveryPending] = useState<string | null>(null);
+  const resolvedWorkspaceId = block.workspaceId || workspaceId || activeWorkspaceId || null;
 
   const previewSandbox = 'allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-downloads';
   const srcDocSandbox = 'allow-scripts allow-forms allow-modals allow-popups allow-downloads';
@@ -182,7 +238,11 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
 
   const handleOpenWorkspaceFile = async (value: string) => {
     const path = resolveWorkspacePath(value);
-    if (!activeWorkspaceId || !path) return;
+    if (!path) return;
+    if (!resolvedWorkspaceId) {
+      showToast(t('toast.fileOpenError', { message: language === 'ru' ? 'Не найден контекст проекта для этого файла.' : 'Missing workspace context for this file.' }));
+      return;
+    }
     if (workspaceFilePreviews[path]) {
       setWorkspaceFilePreviews((prev) => {
         const next = { ...prev };
@@ -193,7 +253,11 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
     }
 
     try {
-      const response = await fetch(`/api/workspaces/${activeWorkspaceId}/file?path=${encodeURIComponent(path)}`);
+      if (activeWorkspaceId !== resolvedWorkspaceId) {
+        setActiveWorkspace(resolvedWorkspaceId);
+      }
+
+      const response = await fetch(`/api/workspaces/${resolvedWorkspaceId}/file?path=${encodeURIComponent(path)}`);
       const payload = await response.json();
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error || 'Failed to load workspace file');
@@ -216,6 +280,7 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
 
   const renderWorkspaceFileButton = (path: string, label?: string) => (
     <button
+      type="button"
       key={`${block.type}:${path}:${label || path}`}
       onClick={() => void handleOpenWorkspaceFile(path)}
       className="rounded-md border border-primary-200 bg-primary-50 px-2 py-1 font-mono text-[0.8rem] text-primary-700 transition-colors hover:bg-primary-100 dark:border-primary-500/20 dark:bg-primary-500/10 dark:text-primary-300 dark:hover:bg-primary-500/20"
@@ -239,6 +304,7 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
                 code: preview!.content
               }}
               messageId={messageId}
+              workspaceId={resolvedWorkspaceId}
             />
           </div>
         ))}
@@ -261,6 +327,10 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
         throw new Error(payload?.error || 'Approval request failed');
       }
 
+      setApprovalResolved(decision);
+      if (activeSessionId) {
+        await fetchMessages(activeSessionId);
+      }
       showToast(t('toast.permissionSent'));
     } catch (error) {
       console.error('Approval request failed:', error);
@@ -471,7 +541,7 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
 
     case 'permission':
       return (
-        <div className="agent-block bg-white dark:bg-graphite-card border border-primary-200 dark:border-primary-900/50 rounded-xl p-3 shadow-sm relative overflow-hidden mt-1 w-fit max-w-lg fade-in" id="agent-permission-block">
+        <div className="agent-block bg-white dark:bg-graphite-card border border-primary-200 dark:border-primary-900/50 rounded-xl p-3 shadow-sm relative overflow-hidden mt-1 w-full max-w-xl fade-in" id="agent-permission-block">
           <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-primary-400 to-indigo-500"></div>
           <div className="flex items-start gap-2.5 mb-2 mt-1">
             <div className="w-7 h-7 rounded-full bg-primary-50 dark:bg-primary-500/10 flex items-center justify-center text-primary-600 shrink-0 border border-primary-100 dark:border-primary-900/30">
@@ -502,29 +572,37 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
               </ul>
             </div>
           )}
-          <div className="flex gap-1.5 permission-actions">
-            <button
-              onClick={() => handleApprovalDecision('reject')}
-              disabled={!!approvalPending}
-              className="flex-1 px-3 py-1.5 text-[0.75rem] font-bold text-gray-600 dark:text-gray-300 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg transition-colors active:scale-95 disabled:opacity-50"
-            >
-              {t('block.reject')}
-            </button>
-            <button
-              onClick={() => handleApprovalDecision('accept')}
-              disabled={!!approvalPending}
-              className="flex-1 px-3 py-1.5 text-[0.75rem] font-bold text-primary-700 bg-primary-50 hover:bg-primary-100 dark:bg-primary-900/30 dark:hover:bg-primary-900/50 dark:text-primary-300 rounded-lg transition-colors active:scale-95 disabled:opacity-50"
-            >
-              {approvalPending === 'accept' ? t('common.loading') : t('block.allowOneStep')}
-            </button>
-            <button
-              onClick={() => handleApprovalDecision('accept_all')}
-              disabled={!!approvalPending}
-              className="flex-[1.5] px-3 py-1.5 text-[0.75rem] font-bold bg-[#2563eb] hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50"
-            >
-              {approvalPending === 'accept_all' ? t('common.loading') : t('block.allowAll')}
-            </button>
-          </div>
+          {approvalResolved ? (
+            <div className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-[0.78rem] font-semibold text-primary-700 dark:border-primary-500/20 dark:bg-primary-500/10 dark:text-primary-300">
+              {approvalResolved === 'reject' || approvalResolved === 'reject_all'
+                ? repairMojibake(language === 'ru' ? 'Решение отправлено. Задача остановлена.' : 'Decision sent. The task has been stopped.')
+                : repairMojibake(language === 'ru' ? 'Решение отправлено. Агент продолжает работу.' : 'Decision sent. The agent is continuing the task.')}
+            </div>
+          ) : (
+            <div className="flex gap-1.5 permission-actions">
+              <button
+                onClick={() => handleApprovalDecision('reject')}
+                disabled={!!approvalPending}
+                className="flex-1 px-3 py-1.5 text-[0.75rem] font-bold text-gray-600 dark:text-gray-300 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg transition-colors active:scale-95 disabled:opacity-50"
+              >
+                {approvalPending === 'reject' ? t('common.loading') : t('block.reject')}
+              </button>
+              <button
+                onClick={() => handleApprovalDecision('accept')}
+                disabled={!!approvalPending}
+                className="flex-1 px-3 py-1.5 text-[0.75rem] font-bold text-primary-700 bg-primary-50 hover:bg-primary-100 dark:bg-primary-900/30 dark:hover:bg-primary-900/50 dark:text-primary-300 rounded-lg transition-colors active:scale-95 disabled:opacity-50"
+              >
+                {approvalPending === 'accept' ? t('common.loading') : t('block.allowOneStep')}
+              </button>
+              <button
+                onClick={() => handleApprovalDecision('accept_all')}
+                disabled={!!approvalPending}
+                className="flex-[1.5] px-3 py-1.5 text-[0.75rem] font-bold bg-[#2563eb] hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm active:scale-95 disabled:opacity-50"
+              >
+                {approvalPending === 'accept_all' ? t('common.loading') : t('block.allowAll')}
+              </button>
+            </div>
+          )}
         </div>
       );
 
@@ -532,11 +610,23 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
       const filePaths = (block.files || [])
         .map((entry: any) => typeof entry === 'string' ? entry : (entry.path || entry.name || ''))
         .filter(Boolean);
+      const isPartial = block.status === 'partial';
       return (
-        <div className="agent-block bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border rounded-xl p-3.5 shadow-sm mt-1 w-fit max-w-[95%] fade-in">
+        <div className="agent-block bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border rounded-xl p-3.5 shadow-sm mt-1 w-full max-w-3xl fade-in">
           <div className="text-[0.75rem] font-bold text-gray-500 mb-2.5 flex items-center gap-2">
-            <GitMerge className="w-3.5 h-3.5 text-orange-500" /> {t('block.workResults')}
+            <GitMerge className={cn("w-3.5 h-3.5", isPartial ? "text-amber-500" : "text-orange-500")} />
+            {repairMojibake(block.title || t('block.workResults'))}
+            {isPartial ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[0.62rem] font-bold uppercase tracking-[0.12em] text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                {repairMojibake(language === 'ru' ? 'частично' : 'partial')}
+              </span>
+            ) : null}
           </div>
+          {block.description ? (
+            <div className="mb-2.5 text-[0.82rem] leading-relaxed text-gray-600 dark:text-gray-400">
+              {repairMojibake(block.description)}
+            </div>
+          ) : null}
           <div className="flex flex-wrap gap-1.5">
             {filePaths.map((path) => renderWorkspaceFileButton(path))}
           </div>
@@ -631,7 +721,7 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
     case 'markdown':
     case 'code':
     case 'runnable_code': {
-      const codeValue = (block.code || block.content || '').trim();
+      const codeValue = normalizeDisplaySource((block.code || block.content || '').trim(), block.type, String(block.path || block.file || block.title || ''));
       const currentPath = block.path || block.file || block.title || (block.type === 'markdown' ? 'content.md' : 'untitled.txt');
       const currentFile = block.file || (typeof currentPath === 'string' ? currentPath.split(/[\\/]/).pop() : '') || (block.type === 'markdown' ? 'content.md' : 'untitled.txt');
       const currentKey = String(currentPath || currentFile);
@@ -649,7 +739,7 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
       if (isCodeOnly || isMarkdown) {
         return (
           <div className={cn(
-            "border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden font-mono text-[0.85rem] shadow-sm bg-white dark:bg-[#0a0a0a] transition-all diff-block"
+            "w-full max-w-3xl border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden font-mono text-[0.85rem] shadow-sm bg-white dark:bg-[#0a0a0a] transition-all diff-block"
           )}>
             <div className="bg-gray-50 dark:bg-[#1a1b1e] px-4 py-2.5 flex justify-between items-center border-b border-gray-200 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -852,7 +942,8 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
       );
     }
 
-    case 'error':
+    case 'error': {
+      const recoveryAvailable = block.recoveryAvailable !== false;
       return (
         <div className="agent-block bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-900/30 rounded-xl p-4 shadow-sm">
           <h4 className="font-bold text-[0.95rem] text-red-800 dark:text-red-400 mb-2 flex items-center gap-2">
@@ -861,24 +952,34 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
           <p className="text-sm text-red-600 dark:text-red-300 mb-4 font-mono text-xs p-2 bg-red-100 dark:bg-red-900/30 rounded border border-red-200 dark:border-red-800/50">
             {repairMojibake(block.text)}
           </p>
-          <div className="flex gap-3">
-            <button
-              onClick={() => handleRecoveryAction('skip')}
-              disabled={!block.taskId || !!recoveryPending}
-              className="px-4 py-1.5 text-xs font-semibold text-red-600 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 rounded-lg transition-colors border border-red-200 dark:border-red-800/50 disabled:opacity-50"
-            >
-              {t('block.skipStep')}
-            </button>
-            <button
-              onClick={() => handleRecoveryAction('fix')}
-              disabled={!block.taskId || !!recoveryPending}
-              className="px-4 py-1.5 text-xs font-semibold bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
-            >
-              <Wrench className="w-3.5 h-3.5" /> {t('block.fixIt')}
-            </button>
-          </div>
+          {block.description ? (
+            <div className="mb-4 text-[0.82rem] leading-relaxed text-red-700 dark:text-red-300">
+              {repairMojibake(block.description)}
+            </div>
+          ) : null}
+          {recoveryAvailable ? (
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => handleRecoveryAction('skip')}
+                disabled={!block.taskId || !!recoveryPending}
+                className="px-4 py-1.5 text-xs font-semibold text-red-600 bg-red-100 hover:bg-red-200 dark:bg-red-900/30 dark:hover:bg-red-900/50 rounded-lg transition-colors border border-red-200 dark:border-red-800/50 disabled:opacity-50"
+              >
+                {t('block.skipStep')}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRecoveryAction('fix')}
+                disabled={!block.taskId || !!recoveryPending}
+                className="px-4 py-1.5 text-xs font-semibold bg-red-600 text-white hover:bg-red-700 rounded-lg transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                <Wrench className="w-3.5 h-3.5" /> {t('block.fixIt')}
+              </button>
+            </div>
+          ) : null}
         </div>
       );
+    }
 
     case 'decision':
     case 'next_step':
@@ -967,7 +1068,7 @@ export function BlockRenderer({ block, messageId }: BlockRendererProps) {
         block.url || (block.taskId ? `/api/tasks/${block.taskId}/preview` : `/preview/${block.taskId || 'current'}/index.html`)
       );
       return (
-        <div className="agent-block bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border rounded-xl shadow-lg overflow-hidden mt-2 w-full max-w-2xl fade-in flex flex-col h-[450px]">
+        <div className="agent-block bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border rounded-xl shadow-lg overflow-hidden mt-2 w-full max-w-3xl fade-in flex flex-col h-[520px]">
           <div className="px-4 py-2.5 bg-gray-50 dark:bg-[#1a1b1e] border-b border-gray-200 dark:border-gray-800 flex justify-between items-center shrink-0">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-md bg-primary-500/10 flex items-center justify-center text-primary-600">

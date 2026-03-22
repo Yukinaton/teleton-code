@@ -35,6 +35,10 @@ export function subscribeTaskStream(taskId, response, getPayload) {
 
     if (payload.task?.status === "completed") {
         writeSse(response, "task.completed", payload);
+    } else if (payload.task?.status === "partial") {
+        writeSse(response, "task.partial", payload);
+    } else if (payload.task?.status === "clarification_required") {
+        writeSse(response, "task.clarification_required", payload);
     } else if (payload.task?.status === "failed") {
         writeSse(response, "task.failed", payload);
     }

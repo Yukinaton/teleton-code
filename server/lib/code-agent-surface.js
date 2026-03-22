@@ -23,10 +23,6 @@ const MODULES = {
         label: "research",
         description: "Look up external documentation or API references when needed."
     },
-    scaffold: {
-        label: "scaffold",
-        description: "Generate greenfield project shells or simple page bootstrap when explicitly requested."
-    },
     destructive: {
         label: "destructive",
         description: "Delete files or folders only when removal is part of the task."
@@ -55,7 +51,6 @@ const TOOL_SURFACE = {
     code_run_command: { module: "shell", kind: "shell", approvalScope: "shell" },
     code_install_dependencies: { module: "shell", kind: "shell", approvalScope: "shell" },
     code_web_search: { module: "research", kind: "research", approvalScope: "research" },
-    code_create_single_page_site: { module: "scaffold", kind: "scaffold", approvalScope: "write" },
     code_delete_path: { module: "destructive", kind: "destructive", approvalScope: "destructive" }
 };
 
@@ -66,7 +61,6 @@ const IDE_CODE_MODULES = [
     "verify",
     "shell",
     "research",
-    "scaffold",
     "destructive"
 ];
 const READ_ONLY_KINDS = new Set(["read", "review", "research"]);
@@ -95,7 +89,7 @@ export function isReadOnlyCodeAgentTool(toolName) {
     return READ_ONLY_KINDS.has(getCodeAgentToolKind(toolName));
 }
 
-export function buildCodeAgentSurfacePolicy({ fullAccess = false, consultationOnly = false } = {}) {
+export function buildCodeAgentSurfacePolicy({ fullAccess = false, consultationOnly = false, loopVersion = 1 } = {}) {
     const allowedModules = consultationOnly
         ? ["workspace", "review", "research"]
         : [...IDE_CODE_MODULES];
@@ -103,6 +97,13 @@ export function buildCodeAgentSurfacePolicy({ fullAccess = false, consultationOn
         .filter(([, definition]) => allowedModules.includes(definition.module))
         .map(([name]) => name);
     const blockedModules = IDE_CODE_MODULES.filter((moduleName) => !allowedModules.includes(moduleName));
+
+    if (loopVersion >= 2) {
+        const scaffoldIndex = blockedModules.indexOf("scaffold");
+        if (scaffoldIndex === -1) {
+            blockedModules.push("scaffold");
+        }
+    }
 
     return {
         allowedModules,
@@ -112,7 +113,7 @@ export function buildCodeAgentSurfacePolicy({ fullAccess = false, consultationOn
             ? []
             : fullAccess
             ? ["destructive"]
-            : ["write", "shell", "scaffold", "destructive"],
+            : ["shell", "destructive"],
         alwaysRequireApprovalKinds: ["destructive"]
     };
 }

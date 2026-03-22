@@ -1,5 +1,6 @@
 ﻿import { languageLabel, resolveTaskLanguage } from "./language.js";
 import { buildCodeAgentProfile } from "./code-agent-profile.js";
+import { buildResponseLanguageInstruction } from "./language.js";
 import { buildCodeAgentSoulText } from "./code-agent-workspace.js";
 
 function hasMeaningfulChangesSection(content) {
@@ -222,8 +223,7 @@ export function shouldForceExecutionV2(prompt, response) {
 }
 
 export function buildTaskPrompt(prompt, workspace, sessionContext = null, workspaceContext = null, settings = {}) {
-    const resolvedLanguage = resolveTaskLanguage(prompt, settings);
-    const language = languageLabel(resolvedLanguage);
+    const responseLanguageInstruction = buildResponseLanguageInstruction(prompt, settings);
     const requestedFiles = extractRequestedFileNames(prompt);
     const isConsultation = isConsultationRequest(prompt);
     const clarificationRequired = needsClarificationV2(prompt);
@@ -261,7 +261,7 @@ export function buildTaskPrompt(prompt, workspace, sessionContext = null, worksp
     * CONSULTATION MODE: If the owner is asking for explanation, tradeoffs, or brainstorming, answer directly and do not change files unless asked.
     * APP PREVIEW: If web files are created or updated, use preview-oriented workflow instead of inventing unnecessary local servers.
     * BE SENIOR: Provide clean, idiomatic, production-ready code. No placeholders.
-    * LANGUAGE: Always respond in ${language}.
+    * LANGUAGE: ${responseLanguageInstruction}
     * THOUGHTS: Your visible steps should be short, factual, and tied to real work.
     * HONESTY: Never claim to have read, changed, tested, or verified something unless tools or code inspection actually confirmed it.
     * RESPONSE FORMAT: Use Markdown for narrative when needed, but keep the answer tight.`;
@@ -274,7 +274,7 @@ ${prompt}
 
 Execution protocol:
 Do not create files outside the active workspace root.
-Always reply in ${language} unless the owner explicitly asks for another language.
+Follow this language rule: ${responseLanguageInstruction}
 Never claim success unless tool output confirmed it.
 Be precise and professional. Avoid "robotic" templates.
 ${explicitFileRule}

@@ -1,7 +1,9 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { runPowerShell } from "./workspace-utils.js";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { extname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { collectWrittenPaths } from "./format-utils.js";
+import { collectWorkspaceFiles, hasJsonStorageArtifact } from "./artifact-capabilities.js";
 
 export function validateHtmlContent(content) {
     const source = String(content || "").trim();
@@ -15,9 +17,18 @@ export function validateHtmlContent(content) {
 export function validateCssContent(content) {
     const source = String(content || "");
     if (!source.trim()) return "CSS file is empty";
+    if (/^\s*\[\s*[{'"`]/.test(source) || /^\s*\{\s*['"`][\w-]+['"`]\s*:/.test(source)) {
+        return "CSS file looks like serialized object data";
+    }
     const open = (source.match(/\{/g) || []).length;
     const close = (source.match(/\}/g) || []).length;
     if (open === 0 || open !== close) return "Invalid block structure";
+    if (!/(?:^|\n)\s*(?:@(?:media|supports|keyframes)|:root|body|html|main|canvas|button|[.#][\w-]+|[\w-]+\s*\{)/i.test(source)) {
+        return "CSS file is missing real selector blocks";
+    }
+    if (!/:\s*[^;]+;/i.test(source)) {
+        return "CSS file is missing real declarations";
+    }
     return null;
 }
 
@@ -39,12 +50,181 @@ export function validateLikelySourcePayload(relativePath, content) {
         return null;
     }
 
-    if (/\.(m?js|cjs|ts|tsx|jsx)$/.test(relativePath)) {
-        if (/^\[\s*["'`]/.test(source) && !/(export|module\.exports|const |let |var |function |class )/.test(source)) {
-            return "JS/TS file looks like a serialized array instead of source code";
+    if (/\.(m?js|cjs|ts|tsx|jsx|py)$/.test(relativePath)) {
+        const codeSignals = /(export|module\.exports|const |let |var |function |class |import |from |def |if __name__|print\(|return |for |while )/;
+        const topLevelCodeSignals =
+            /\.py$/i.test(relativePath)
+                ? /^\s*(?:from|import|def|class|async\s+def|if __name__\s*==|@[\w.]+|[A-Za-z_][\w]*\s*=)/m
+                : /^\s*(?:const|let|var|function|class|import|export|document|window|localStorage|module\.exports)/m;
+        const quotedKeyPairs = (source.match(/['"`][^'"`\n]{1,80}['"`]\s*:/g) || []).length;
+        if (/^\[\s*["'`]/.test(source) && !codeSignals.test(source)) {
+            return "Source file looks like a serialized array instead of code";
         }
-        if (/^\{\s*['"]\w+['"]\s*:/.test(source) && !/(export default|module\.exports|const |let |var )/.test(source)) {
-            return "JS/TS file looks like serialized object data instead of source code";
+        if (/^\{\s*['"]\w+['"]\s*:/.test(source) && !codeSignals.test(source)) {
+            return "Source file looks like serialized object data instead of code";
+        }
+        if ((/^\[\s*\[/.test(source) || /^\[\s*\{/.test(source)) && !codeSignals.test(source)) {
+            return "Source file looks like nested serialized data instead of code";
+        }
+        if (/^\s*[\[{]/.test(source) && quotedKeyPairs >= 2 && !topLevelCodeSignals.test(source)) {
+            return "Source file looks like serialized structured data instead of real code";
+        }
+    }
+
+    return null;
+}
+
+function runCommand(args, cwd, timeoutMs, outputLimit) {
+    return new Promise((resolvePromise, rejectPromise) => {
+        const child = spawn(args[0], args.slice(1), {
+            cwd,
+            windowsHide: true
+        });
+
+        let stdout = "";
+        let stderr = "";
+        let finished = false;
+        const timer = setTimeout(() => {
+            if (finished) {
+                return;
+            }
+            child.kill();
+            rejectPromise(new Error(`Command timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        const append = (value, chunk) => {
+            const next = value + chunk.toString("utf-8");
+            if (next.length <= outputLimit) {
+                return next;
+            }
+            return `${next.slice(0, outputLimit)}\n...[truncated ${next.length - outputLimit} chars]`;
+        };
+
+        child.stdout.on("data", (chunk) => {
+            stdout = append(stdout, chunk);
+        });
+        child.stderr.on("data", (chunk) => {
+            stderr = append(stderr, chunk);
+        });
+        child.on("error", (error) => {
+            clearTimeout(timer);
+            rejectPromise(error);
+        });
+        child.on("close", (code) => {
+            finished = true;
+            clearTimeout(timer);
+            resolvePromise({
+                exitCode: code ?? 0,
+                stdout,
+                stderr
+            });
+        });
+    });
+}
+
+async function runFirstAvailableCommand(candidates, cwd, timeoutMs, outputLimit) {
+    let lastError = null;
+
+    for (const candidate of candidates) {
+        try {
+            return await runCommand(candidate, cwd, timeoutMs, outputLimit);
+        } catch (error) {
+            if (error?.code === "ENOENT") {
+                lastError = error;
+                continue;
+            }
+            throw error;
+        }
+    }
+
+    throw lastError || new Error("No compatible runtime was found to validate the source file.");
+}
+
+export async function validateSourceCandidate(relativePath, content, serviceConfig, cwd = process.cwd()) {
+    const normalizedPath = String(relativePath || "").toLowerCase();
+    const source = String(content || "");
+
+    if (/\.(html?|htm)$/i.test(normalizedPath)) {
+        return validateHtmlContent(source);
+    }
+
+    if (/\.css$/i.test(normalizedPath)) {
+        return validateCssContent(source);
+    }
+
+    if (/\.json$/i.test(normalizedPath)) {
+        return validateJsonContent(source);
+    }
+
+    if (/\.(m?js|cjs|jsx|ts|tsx)$/i.test(normalizedPath)) {
+        const payloadProblem = validateLikelySourcePayload(relativePath, source);
+        if (payloadProblem) {
+            return payloadProblem;
+        }
+
+        if (!/\.(m?js|cjs|jsx)$/i.test(normalizedPath)) {
+            return null;
+        }
+
+        const tempPath = join(
+            tmpdir(),
+            `teleton-code-syntax-${Date.now()}-${Math.random().toString(36).slice(2)}${extname(normalizedPath) || ".js"}`
+        );
+
+        try {
+            writeFileSync(tempPath, source, "utf-8");
+            const check = await runCommand(
+                [process.execPath, "--check", tempPath],
+                cwd,
+                serviceConfig.runtime.maxShellTimeoutMs,
+                12000
+            );
+
+            if (check.exitCode !== 0) {
+                return `JS syntax check failed (${check.stderr || "unknown error"})`;
+            }
+        } finally {
+            try {
+                rmSync(tempPath, { force: true });
+            } catch {
+                // Ignore temp cleanup failures.
+            }
+        }
+    }
+
+    if (/\.py$/i.test(normalizedPath)) {
+        const payloadProblem = validateLikelySourcePayload(relativePath, source);
+        if (payloadProblem) {
+            return payloadProblem;
+        }
+
+        const tempPath = join(
+            tmpdir(),
+            `teleton-code-syntax-${Date.now()}-${Math.random().toString(36).slice(2)}${extname(normalizedPath) || ".py"}`
+        );
+
+        try {
+            writeFileSync(tempPath, source, "utf-8");
+            const check = await runFirstAvailableCommand(
+                [
+                    ["python", "-m", "py_compile", tempPath],
+                    ["python3", "-m", "py_compile", tempPath],
+                    ["py", "-3", "-m", "py_compile", tempPath]
+                ],
+                cwd,
+                serviceConfig.runtime.maxShellTimeoutMs,
+                12000
+            );
+
+            if (check.exitCode !== 0) {
+                return `Python syntax check failed (${check.stderr || check.stdout || "unknown error"})`;
+            }
+        } finally {
+            try {
+                rmSync(tempPath, { force: true });
+            } catch {
+                // Ignore temp cleanup failures.
+            }
         }
     }
 
@@ -235,7 +415,7 @@ export async function validateWrittenFiles(workspace, toolCalls, serviceConfig) 
 
         if (relativePath.endsWith(".html")) {
             htmlFiles.push({ path: relativePath, content });
-            const problem = validateHtmlContent(content);
+            const problem = await validateSourceCandidate(relativePath, content, serviceConfig, workspace.path);
             if (problem) problems.push(`${relativePath}: ${problem}`);
 
             for (const assetPath of collectHtmlAssetReferences(relativePath, content)) {
@@ -244,27 +424,15 @@ export async function validateWrittenFiles(workspace, toolCalls, serviceConfig) 
                 }
             }
         } else if (relativePath.endsWith(".css")) {
-            const problem = validateCssContent(content);
+            const problem = await validateSourceCandidate(relativePath, content, serviceConfig, workspace.path);
             if (problem) problems.push(`${relativePath}: ${problem}`);
         } else if (relativePath.endsWith(".json")) {
-            const problem = validateJsonContent(content);
+            const problem = await validateSourceCandidate(relativePath, content, serviceConfig, workspace.path);
             if (problem) problems.push(`${relativePath}: ${problem}`);
-        } else if (/\.(m?js|cjs)$/.test(relativePath)) {
+        } else if (/\.(m?js|cjs|py)$/.test(relativePath)) {
             scriptFiles.push({ path: relativePath, content });
-            const payloadProblem = validateLikelySourcePayload(relativePath, content);
-            if (payloadProblem) {
-                problems.push(`${relativePath}: ${payloadProblem}`);
-                continue;
-            }
-            const check = await runPowerShell(
-                `node --check "${absolutePath.replace(/"/g, '\\"')}"`,
-                workspace.path,
-                serviceConfig.runtime.maxShellTimeoutMs,
-                12000
-            );
-            if (check.exitCode !== 0) {
-                problems.push(`${relativePath}: JS syntax check failed (${check.stderr || "unknown error"})`);
-            }
+            const problem = await validateSourceCandidate(relativePath, content, serviceConfig, workspace.path);
+            if (problem) problems.push(`${relativePath}: ${problem}`);
         }
     }
 
@@ -342,18 +510,80 @@ export function promptRequestsLocalStorage(prompt) {
     return /\blocalstorage\b/i.test(String(prompt || ""));
 }
 
+export function promptRequestsJsonStorage(prompt) {
+    const source = String(prompt || "");
+    return (
+        /\bjson\b/i.test(source) &&
+        /\b(file|storage|store|persist|save|local)\b/i.test(source)
+    ) ||
+        /(?:json[- ]?\u0444\u0430\u0439\u043b|\u0444\u0430\u0439\u043b \u0432 json|json \u0444\u0430\u0439\u043b|\u0445\u0440\u0430\u043d[^\s]* \u0432 json|\u0441\u043e\u0445\u0440\u0430\u043d[^\s]* \u0432 json|\u043b\u043e\u043a\u0430\u043b\u044c\u043d[^\s]* json)/i.test(
+            source
+        );
+}
+
 export function promptRequestsDarkTheme(prompt) {
     const source = String(prompt || "");
-    return /\bdark\b/i.test(source) || /(темн|тёмн)/i.test(source);
+    return /\bdark\b/i.test(source) || /(?:\u0442\u0435\u043c\u043d|\u0442\u0451\u043c\u043d)/i.test(source);
+}
+
+function collectRequestedFeatureExpectations(promptText) {
+    const source = String(promptText || "");
+    const expectations = [];
+    const push = (problem, pattern) => expectations.push({ problem, pattern });
+
+    if (/\brestart\b|\breset\b|(?:\u043f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u043a)|(?:\u0440\u0435\u0441\u0442\u0430\u0440\u0442)/i.test(source)) {
+        push(
+            "Prompt requests restart controls, but no restart/reset signal was found",
+            /\brestart\b|\breset\b|(?:\u043f\u0435\u0440\u0435\u0437\u0430\u043f\u0443\u0441\u043a)|(?:\u0440\u0435\u0441\u0442\u0430\u0440\u0442)/i
+        );
+    }
+
+    if (/\bpause\b|(?:\u043f\u0430\u0443\u0437)/i.test(source)) {
+        push("Prompt requests pause controls, but no pause signal was found", /\bpause\b|(?:\u043f\u0430\u0443\u0437)/i);
+    }
+
+    if (/\bscore\b|\bpoints?\b|(?:\u0441\u0447[\u0435\u0451]\u0442)|(?:\u043e\u0447\u043a)/i.test(source)) {
+        push(
+            "Prompt requests score handling, but no score signal was found",
+            /\bscore\b|\bpoints?\b|(?:\u0441\u0447[\u0435\u0451]\u0442)|(?:\u043e\u0447\u043a)/i
+        );
+    }
+
+    if (/\bnext piece\b|\bnext block\b|(?:\u0441\u043b\u0435\u0434\u0443\u044e\u0449)/i.test(source)) {
+        push(
+            "Prompt requests a next-piece indicator, but no next-piece signal was found",
+            /\bnext\b|(?:\u0441\u043b\u0435\u0434\u0443\u044e\u0449)/i
+        );
+    }
+
+    if (/\bkeyboard\b|\bkeys?\b|\barrow\b|(?:\u043a\u043b\u0430\u0432\u0438\u0430\u0442\u0443\u0440)|(?:\u0441\u0442\u0440\u0435\u043b\u043a)/i.test(source)) {
+        push(
+            "Prompt requests keyboard controls, but no keyboard input signal was found",
+            /addEventListener\s*\(\s*['"`]key|keydown|keyup|ArrowUp|ArrowDown|ArrowLeft|ArrowRight/i
+        );
+    }
+
+    if (/\bfood\b|\bapple\b|(?:\u0435\u0434\u0430)|(?:\u044f\u0431\u043b\u043e\u043a)/i.test(source)) {
+        push("Prompt requests food spawning, but no food signal was found", /\bfood\b|\bapple\b|placeFood|spawn/i);
+    }
+
+    return expectations;
 }
 
 export async function validatePromptAlignment(prompt, workspace, toolCalls, extractFileNames) {
     const writtenPaths = collectWrittenPaths(toolCalls);
-    if (writtenPaths.length === 0) return [];
+    const relevantWorkspaceFiles =
+        workspace?.path
+            ? collectWorkspaceFiles(workspace.path, 3)
+                  .filter((path) => /\.(?:html?|css|m?js|cjs|jsx|ts|tsx|py|md|txt|json)$/i.test(path))
+                  .slice(0, 24)
+            : [];
+    const candidatePaths = [...new Set([...writtenPaths, ...relevantWorkspaceFiles])];
+    if (candidatePaths.length === 0) return [];
 
     const problems = [];
     const contents = [];
-    for (const relPath of writtenPaths) {
+    for (const relPath of candidatePaths) {
         try { contents.push(readFileSync(join(workspace.path, relPath), "utf-8")); } catch {}
     }
 
@@ -392,8 +622,20 @@ export async function validatePromptAlignment(prompt, workspace, toolCalls, extr
         problems.push("Prompt requires localStorage, but no reference found");
     }
 
+    if (promptRequestsJsonStorage(promptText)) {
+        if (!hasJsonStorageArtifact(workspace.path, 3)) {
+            problems.push("Prompt requires local JSON storage, but no JSON storage implementation was found");
+        }
+    }
+
     if (promptRequestsDarkTheme(promptText) && !detectDarkThemeInContent(mergedContent)) {
         problems.push("Prompt requires dark theme, but no signal detected");
+    }
+
+    for (const expectation of collectRequestedFeatureExpectations(promptText)) {
+        if (!expectation.pattern.test(mergedContent)) {
+            problems.push(expectation.problem);
+        }
     }
 
     return problems;

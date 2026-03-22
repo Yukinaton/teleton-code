@@ -2,7 +2,7 @@
   "name": "teleton-code",
   "version": "0.1.2",
   "type": "module",
-  "description": "Cloud IDE companion for Teleton Agent with a Teleton-powered code agent",
+  "description": "Local-first companion IDE for Teleton Agent with a Teleton-powered code agent",
   "author": "Yukinaton",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,6 @@
     "teleton-agent",
     "ide",
     "code-agent",
-    "cloud-ide",
     "telegram"
   ],
   "engines": {
@@ -32,7 +31,9 @@
     "bin/**/*.js",
     "cli/**/*.js",
     "docs/assets/**/*.svg",
-    "docs/**/*.md",
+    "docs/architecture.md",
+    "docs/configuration.md",
+    "docs/getting-started.md",
     "scripts/start-service.cmd",
     "server/**/*.js",
     "server/public/**/*",
@@ -44,7 +45,9 @@
     "start": "node bin/teleton-code.js start",
     "start:server": "node server/index.js",
     "start:cli": "node bin/teleton-code.js start",
-    "check": "node --check server/index.js && node --check server/app.js && node --check server/application/agent/clarification-flow.js && node --check server/application/agent/session-prompt-service.js && node --check server/application/agent/structured-build-flow.js && node --check server/application/chat/attachment-service.js && node --check server/handlers/file-handler.js && node --check server/handlers/workspace-handler.js && node --check server/lib/config.js && node --check server/lib/state-store.js && node --check server/lib/code-agent-profile.js && node --check server/lib/code-agent-surface.js && node --check server/lib/code-agent-workspace.js && node --check server/lib/code-tool-registry.js && node --check server/lib/coding-tools.js && node --check server/lib/prompt-engine.js && node --check server/lib/runtime-adapter.js && node --check server/lib/workspace-utils.js && node --check scripts/sync-client-build.mjs && node --check cli/index.js && node --check bin/teleton-code.js",
+    "check": "node --check server/index.js && node --check server/app.js && node --check server/application/code-agent/compatibility-state.js && node --check server/application/chat/attachment-service.js && node --check server/application/code-agent/index.js && node --check server/application/code-agent/turn-controller.js && node --check server/application/code-agent/task-projection.js && node --check server/application/code-agent/task-state.js && node --check server/application/code-agent/task-state-view.js && node --check server/application/code-agent/transitions.js && node --check server/application/code-agent/stages/grounding.js && node --check server/application/code-agent/stages/clarify.js && node --check server/application/code-agent/stages/execute.js && node --check server/application/code-agent/stages/verify.js && node --check server/application/code-agent/stages/repair.js && node --check server/application/code-agent/stages/finalize.js && node --check server/application/code-agent/services/evidence.js && node --check server/application/code-agent/services/failures.js && node --check server/application/code-agent/services/result-composer.js && node --check server/application/code-agent/services/scope.js && node --check server/application/code-agent/policy/tools.js && node --check server/application/code-agent/policy/approval.js && node --check server/application/code-agent/policy/runtime-budget.js && node --check server/handlers/file-handler.js && node --check server/handlers/task-handler.js && node --check server/handlers/workspace-handler.js && node --check server/lib/config.js && node --check server/lib/state-store.js && node --check server/lib/code-agent-profile.js && node --check server/lib/code-agent-surface.js && node --check server/lib/code-agent-workspace.js && node --check server/lib/code-tool-registry.js && node --check server/lib/coding-tools.js && node --check server/lib/prompt-engine.js && node --check server/lib/runtime-adapter.js && node --check server/lib/task-orchestrator.js && node --check server/lib/workspace-utils.js && node --check scripts/agent-metrics.mjs && node --check scripts/sync-client-build.mjs && node --check cli/index.js && node --check bin/teleton-code.js",
+    "test:code-agent": "node --test tests/code-agent/*.test.js",
+    "agent:metrics": "node scripts/agent-metrics.mjs",
     "smoke:tools": "node scripts/tool-smoke.mjs",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run build"

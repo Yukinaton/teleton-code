@@ -10,17 +10,24 @@ export function handleGitStatus(workspaceId, stateStore, config, response) {
         workspace.path,
         config.runtime.maxShellTimeoutMs,
         config.runtime.maxShellOutputChars
-    ).then(result => {
-        json(response, 200, {
-            success: true,
-            data: {
-                workspace: workspace.name,
-                success: result.exitCode === 0,
-                stdout: result.stdout,
-                stderr: result.stderr
-            }
+    )
+        .then((result) => {
+            json(response, 200, {
+                success: true,
+                data: {
+                    workspace: workspace.name,
+                    success: result.exitCode === 0,
+                    stdout: result.stdout,
+                    stderr: result.stderr
+                }
+            });
+        })
+        .catch((error) => {
+            json(response, 500, {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            });
         });
-    });
 }
 
 export function handleGitDiff(workspaceId, stateStore, config, query, response) {
@@ -36,15 +43,22 @@ export function handleGitDiff(workspaceId, stateStore, config, query, response) 
         workspace.path,
         config.runtime.maxShellTimeoutMs,
         1_000_000 // DIFF_LIMIT
-    ).then(result => {
-        json(response, 200, {
-            success: true,
-            data: {
-                workspace: workspace.name,
-                success: result.exitCode === 0,
-                stdout: result.stdout,
-                stderr: result.stderr
-            }
+    )
+        .then((result) => {
+            json(response, 200, {
+                success: true,
+                data: {
+                    workspace: workspace.name,
+                    success: result.exitCode === 0,
+                    stdout: result.stdout,
+                    stderr: result.stderr
+                }
+            });
+        })
+        .catch((error) => {
+            json(response, 500, {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            });
         });
-    });
 }

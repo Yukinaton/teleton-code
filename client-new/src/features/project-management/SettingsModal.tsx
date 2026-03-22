@@ -18,7 +18,6 @@ import { cn } from '../../shared/utils/cn';
 import { FileTree } from '../../widgets/file-explorer/FileTree';
 import { CodeEditor } from '../../entities/editor/components/CodeEditor';
 import { useI18n } from '../../shared/i18n/useI18n';
-import { repairMojibake } from '../../shared/utils/text';
 
 type Tab = 'workspace' | 'ide' | 'agent' | 'archive';
 const PROJECTS_ROOT_WORKSPACE_ID = '__projects_root__';
@@ -38,16 +37,20 @@ export function SettingsModal() {
   const { t } = useI18n();
   const activeWorkspaceId = useChatStore((state) => state.activeWorkspaceId);
   const { selectedPath, setSelectedPath, selectedType, reset } = useFileStore();
-  useWorkspaces();
+  const { data: workspaces } = useWorkspaces();
   
   const [activeTab, setActiveTab] = useState<Tab>('workspace');
   const [isEditing, setIsEditing] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [validationError, setValidationError] = useState('');
   
+  const hasActiveWorkspace = Boolean(
+    activeWorkspaceId &&
+    (workspaces || []).some((workspace) => workspace.id === activeWorkspaceId)
+  );
   const workspaceId = activeTab === 'workspace'
     ? PROJECTS_ROOT_WORKSPACE_ID
-    : (activeWorkspaceId || '');
+    : (hasActiveWorkspace ? activeWorkspaceId || '' : '');
   const { data: files, isLoading } = useWorkspaceFiles(workspaceId);
   const { data: runtimeStatus } = useRuntimeStatus();
   const webSearchEnabled = Boolean(runtimeStatus?.webSearch?.enabled);
@@ -137,30 +140,8 @@ export function SettingsModal() {
     if (modalType === 'create_file') return t('settings.createFile');
     return t('settings.createFolder');
   };
-
-  const webSearchStatusText = webSearchEnabled
-    ? language === 'ru'
-      ? 'Включен через Teleton Agent'
-      : 'Enabled via Teleton Agent'
-    : language === 'ru'
-      ? 'Выключен в Teleton Agent'
-      : 'Disabled in Teleton Agent';
-
-  const webSearchHelperText = webSearchEnabled
-    ? language === 'ru'
-      ? 'Управляется настройками Teleton Agent.'
-      : 'Managed by Teleton Agent settings.'
-    : language === 'ru'
-      ? 'Чтобы включить веб-поиск, настройте Tavily API key в Teleton Agent.'
-      : 'To enable web search, configure a Tavily API key in Teleton Agent.';
-
-  const _handleWebSearchToggleAttempt = () => {
+  const handleWebSearchToggleAttempt = () => {
     if (webSearchEnabled) {
-      showToast(
-        language === 'ru'
-          ? 'Веб-поиск управляется настройками Teleton Agent.'
-          : 'Web search is managed by Teleton Agent settings.'
-      );
       return;
     }
 
@@ -170,35 +151,6 @@ export function SettingsModal() {
         : 'Enable web search in Teleton Agent settings first.'
     );
   };
-
-  const displayWebSearchStatusText = language === 'ru'
-    ? repairMojibake(webSearchStatusText)
-    : webSearchStatusText;
-  const displayWebSearchHelperText = webSearchEnabled
-    ? ''
-    : (language === 'ru'
-        ? repairMojibake('Чтобы включить веб-поиск, настройте Tavily API key в Teleton Agent.')
-        : webSearchHelperText);
-
-  const handleResolvedWebSearchToggleAttempt = () => {
-    void _handleWebSearchToggleAttempt;
-
-    if (webSearchEnabled) {
-      showToast(
-        language === 'ru'
-          ? repairMojibake('Веб-поиск управляется настройками Teleton Agent.')
-          : 'Web search is managed by Teleton Agent settings.'
-      );
-      return;
-    }
-
-    showToast(
-      language === 'ru'
-        ? repairMojibake('Сначала включите веб-поиск в настройках Teleton Agent.')
-        : 'Enable web search in Teleton Agent settings first.'
-    );
-  };
-
   return (
     <div className="fixed inset-0 bg-gray-900/40 dark:bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center fade-in">
       <div className="bg-white dark:bg-graphite-card border border-gray-200 dark:border-graphite-border w-full max-w-[800px] rounded-2xl shadow-2xl overflow-hidden transform transition-all modal-content pop-in flex flex-col h-[520px]">
@@ -330,16 +282,11 @@ export function SettingsModal() {
                       <div className="p-2 bg-blue-100 dark:bg-blue-500/20 rounded-xl text-blue-600">
                         <Globe className="w-5 h-5" />
                       </div>
-                        <div>
-                          <div className="font-bold text-gray-900 dark:text-white text-sm">{t('settings.webSearch')}</div>
-                          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          {displayWebSearchStatusText}
-                          </div>
-                        </div>
+                      <div className="font-bold text-gray-900 dark:text-white text-sm">{t('settings.webSearch')}</div>
                     </div>
                     <label
                       className="relative inline-flex items-center cursor-pointer shrink-0"
-                      onClick={handleResolvedWebSearchToggleAttempt}
+                      onClick={handleWebSearchToggleAttempt}
                     >
                       <input
                         type="checkbox"
@@ -350,11 +297,6 @@ export function SettingsModal() {
                       <div className="w-10 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-graphite-hover peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-primary-500"></div>
                     </label>
                   </div>
-                  {displayWebSearchHelperText ? (
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
-                      {displayWebSearchHelperText}
-                    </p>
-                  ) : null}
                 </div>
               </div>
             )}

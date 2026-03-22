@@ -267,7 +267,7 @@ function buildPermissionItems(task, language = "ru", options = {}) {
 
 function inferPreviewBlockType(filePath) {
     const extension = extname(filePath).toLowerCase();
-    if (extension === ".md") {
+    if (extension === ".md" || extension === ".txt") {
         return "markdown";
     }
     if ([".html", ".htm"].includes(extension)) {
@@ -316,6 +316,13 @@ function collectChangedFilePreviewBlocks(workspace, changedFiles = []) {
     }
 
     return blocks;
+}
+
+function stripFencedCode(text) {
+    return String(text || "")
+        .replace(/```[\w-]*\n[\s\S]*?```/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
 }
 
 function resolvePreviewEntry(workspace, changedFiles = [], inspectedFiles = []) {
@@ -428,6 +435,15 @@ function collectTerminalBlocks(task) {
     return blocks;
 }
 
+function resolveTaskEngine(task) {
+    const engine = String(task?.taskEngine || "").toLowerCase();
+    if (engine === "standard" || engine === "compatibility") {
+        return engine;
+    }
+
+    return (task?.agentLoopVersion || 1) >= 3 ? "standard" : "compatibility";
+}
+
 function collectSearchBlocks(toolCalls = []) {
     const blocks = [];
 
@@ -505,14 +521,85 @@ function collectDiffBlocks(toolCalls = []) {
     return Array.from(latestByFile.values()).slice(-3);
 }
 
+function isGenericValidationText(text = "") {
+    const normalized = String(text || "").trim().toLowerCase();
+    if (!normalized) {
+        return true;
+    }
+
+    return (
+        normalized === "validation completed without errors." ||
+        normalized === "validation finished with errors." ||
+        normalized === "verification was skipped." ||
+        normalized === "verification passed." ||
+        normalized === "verified after changes." ||
+        normalized === "проверка завершилась без ошибок." ||
+        normalized === "проверка завершилась с ошибками." ||
+        normalized === "проверка была пропущена." ||
+        normalized === "проверка пройдена."
+    );
+}
+
 function buildValidationBlock(task, sections, language) {
     const verification = sections.find((section) => section.name === "verification");
+    const verificationText = String(verification?.text || "").trim();
+    const verifyStatus = String(task?.verify?.status || "").toLowerCase();
+    const verifyReason = String(task?.verify?.reason || "").trim();
+    const isFailedTask = task?.status === "failed";
+    const resultSummary = String(task?.resultSummary || "").toLowerCase();
+    const evidenceState = String(task?.evidenceState || "").toLowerCase();
+    const hasFailureSignal =
+        isFailedTask ||
+        evidenceState === "claim_mismatch" ||
+        /(critical tool failures|validation failed|artifact contract failed|artifact quality failed|prompt alignment failed|verification failed|timed out|missing)/i.test(
+            resultSummary
+        );
+
     if (verification) {
+        if (!verificationText || hasFailureSignal || isGenericValidationText(verificationText)) {
+            return null;
+        }
+
+        const verificationLooksSuccessful = /(?:without errors|verification passed|passed successfully|без ошибок|проверка пройдена)/i.test(
+            verificationText
+        );
         return {
             type: "validation",
-            status: task?.status === "completed" ? "success" : "warning",
-            text: verification.text
+            status: verificationLooksSuccessful ? "success" : task?.status === "completed" ? "success" : "warning",
+            text: verificationText
         };
+    }
+
+    if (verifyStatus === "failed") {
+        return {
+            type: "validation",
+            status: "error",
+            text:
+                verifyReason ||
+                (language === "ru"
+                    ? "Проверка завершилась с ошибками."
+                    : "Validation finished with errors.")
+        };
+    }
+
+    if (verifyStatus === "not_applicable") {
+        if (hasFailureSignal) {
+            return null;
+        }
+
+        if (!verifyReason || isGenericValidationText(verifyReason)) {
+            return null;
+        }
+
+        return {
+            type: "validation",
+            status: "warning",
+            text: verifyReason
+        };
+    }
+
+    if (verifyStatus === "passed") {
+        return null;
     }
 
     const checkStep = (task?.steps || []).find(
@@ -530,18 +617,40 @@ function buildValidationBlock(task, sections, language) {
             : typeof checkStep?.result?.exitCode === "number"
               ? checkStep.result.exitCode
               : 0;
+    const skipped = checkStep?.result?.data?.skipped === true;
+    const skippedReason = String(checkStep?.result?.data?.reason || "").trim();
+
+    if (skipped) {
+        if (hasFailureSignal) {
+            return null;
+        }
+
+        if (!skippedReason || isGenericValidationText(skippedReason)) {
+            return null;
+        }
+
+        return {
+            type: "validation",
+            status: "warning",
+            text: skippedReason
+        };
+    }
+
+    if (exitCode === 0 && hasFailureSignal) {
+        return null;
+    }
+
+    if (exitCode === 0) {
+        return null;
+    }
 
     return {
         type: "validation",
-        status: exitCode === 0 ? "success" : "error",
+        status: "error",
         text:
-            exitCode === 0
-                ? language === "ru"
-                    ? "Проверка завершилась без ошибок."
-                    : "Validation completed without errors."
-                : language === "ru"
-                  ? "Проверка завершилась с ошибками."
-                  : "Validation finished with errors."
+            language === "ru"
+                ? "Проверка завершилась с ошибками."
+                : "Validation finished with errors."
     };
 }
 
@@ -575,7 +684,8 @@ export function buildPermissionBlocks(task, language = "ru", options = {}) {
     if (changedFiles.length > 0) {
         blocks.push({
             type: "file_actions",
-            files: changedFiles
+            files: changedFiles,
+            workspaceId: task?.workspaceId || null
         });
         blocks.push(...collectDiffBlocks(executedToolCalls));
     }
@@ -631,6 +741,17 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
     const changed = collectChangedFiles(combinedToolCalls);
     const summaryItems = summarySection ? markdownItems(summarySection.text) : [];
     const summaryHasFileReferences = containsFileReferences(summaryItems);
+    const taskMode = String(task?.mode || "").toLowerCase();
+    const taskEngine = resolveTaskEngine(task);
+    const isCompatibilityTask = taskEngine === "compatibility";
+    const shouldSuppressRawNarrative =
+        isCompatibilityTask && ["execute", "recover", "act"].includes(taskMode) && changed.length > 0;
+    const narrativeText = changed.length > 0 ? stripFencedCode(narrative?.text || "") : narrative?.text || "";
+    const fallbackNarrativeText =
+        changed.length > 0 ? stripFencedCode(content.trim()) : content.trim();
+    const showPartialArtifacts = task?.status === "failed" || task?.status === "partial" || task?.phase === "idle";
+    const failureText =
+        content || (language === "ru" ? "Задача завершилась с ошибкой." : "Task failed.");
 
     const hasSpecialSections = Boolean(
         summarySection ||
@@ -640,7 +761,7 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
             sections.find((section) => section.name === "verification")
     );
 
-    if (!hasSpecialSections && changed.length === 0 && content.trim()) {
+    if (!hasSpecialSections && changed.length === 0 && content.trim() && task?.status !== "failed") {
         return [
             {
                 type: "narrative",
@@ -649,10 +770,10 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
         ];
     }
 
-    if (narrative) {
-        blocks.push({ type: "narrative", text: narrative.text });
-    } else if (!planSection && !summarySection && content.trim()) {
-        blocks.push({ type: "narrative", text: content.trim() });
+    if (!shouldSuppressRawNarrative && narrativeText) {
+        blocks.push({ type: "narrative", text: narrativeText });
+    } else if (!shouldSuppressRawNarrative && !planSection && !summarySection && fallbackNarrativeText) {
+        blocks.push({ type: "narrative", text: fallbackNarrativeText });
     }
 
     if (inspected.length > 0 && (Boolean(findingsSection) || task?.status === "failed")) {
@@ -683,7 +804,29 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
             blocks.push({
                 type: "file_actions",
                 files: changed,
-                previewable: changed.some((file) => file.endsWith(".html"))
+                workspaceId: workspace?.id || task?.workspaceId || null,
+                previewable: changed.some((file) => file.endsWith(".html")),
+                status: showPartialArtifacts ? "partial" : "success",
+                title:
+                    task?.status === "failed" || task?.status === "partial"
+                        ? language === "ru"
+                            ? "Частичные артефакты"
+                            : "Partial artifacts"
+                        : task?.phase === "idle"
+                          ? language === "ru"
+                              ? "Промежуточные артефакты"
+                              : "Intermediate artifacts"
+                          : undefined,
+                description:
+                    task?.status === "failed" || task?.status === "partial"
+                        ? language === "ru"
+                            ? "Часть файлов успела измениться до сбоя. Проверьте результат перед продолжением."
+                            : "Some files changed before the task failed. Review them before continuing."
+                        : task?.phase === "idle"
+                          ? language === "ru"
+                              ? "Агент завершил текущий ход и оставил промежуточные файлы для следующего шага."
+                              : "The agent finished the current turn and left intermediate files for the next step."
+                          : undefined
             });
         }
         if (shouldShowDiffBlocks(task)) {
@@ -691,7 +834,7 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
         }
 
         const hasHtml = changed.some((file) => file.endsWith(".html")) || inspected.some((file) => file.endsWith(".html"));
-        if (hasHtml && task?.status === "completed" && workspace?.id) {
+        if (hasHtml && task?.status === "completed" && task?.phase === "completed" && workspace?.id) {
             const previewEntry = resolvePreviewEntry(workspace, changed, inspected);
             if (previewEntry && canRenderPreview(workspace, previewEntry)) {
                 blocks.push({
@@ -712,7 +855,15 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
         blocks.push({
             type: "error",
             taskId: task?.id || null,
-            text: content || (language === "ru" ? "Задача завершилась с ошибкой." : "Task failed.")
+            text: failureText,
+            workspaceId: workspace?.id || task?.workspaceId || null,
+            recoveryAvailable: taskEngine === "compatibility",
+            description:
+                taskEngine === "standard"
+                    ? language === "ru"
+                        ? "Для этого цикла внешние кнопки восстановления не используются. Запустите следующий ход новым сообщением."
+                        : "External recovery buttons are not used for this loop. Start the next turn with a new message."
+                    : undefined
         });
     } else if ((task?.steps || []).some((step) => step?.level === "repair")) {
         blocks.push({
@@ -729,7 +880,8 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
             type: "summary",
             text: summarySection.text,
             items: summaryItems,
-            files: changed
+            files: changed,
+            workspaceId: workspace?.id || task?.workspaceId || null
         });
     }
 
@@ -741,5 +893,15 @@ export function buildAssistantBlocks({ task, content, toolCalls = [], language =
         blocks.push({ type: "summary", text: content.trim() });
     }
 
-    return blocks;
+    let seenErrorBlock = false;
+    return blocks.filter((block) => {
+        if (block?.type !== "error") {
+            return true;
+        }
+        if (seenErrorBlock) {
+            return false;
+        }
+        seenErrorBlock = true;
+        return true;
+    });
 }

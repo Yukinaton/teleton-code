@@ -50,6 +50,9 @@ export function useWorkspaceFiles(workspaceId: string, path = '') {
     queryKey: ['workspace-files', workspaceId, path],
     queryFn: async () => {
       const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/files?path=${encodeURIComponent(path)}`);
+      if (res.status === 404) {
+        return [] as FileNode[];
+      }
       const json = await res.json();
       return json.data.entries as FileNode[];
     },

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { nowIso } from "./state-helpers.js";
+import { resolveTaskEngine, STANDARD_TASK_ENGINE } from "../../../application/code-agent/task-engine.js";
 
 export function listSessions(store, workspaceId) {
     return store.state.sessions
@@ -15,11 +16,12 @@ export function getMessages(store, sessionId) {
     return store.state.messages[sessionId] || [];
 }
 
-export function createSession(store, workspaceId, title = "New chat") {
+export function createSession(store, workspaceId, title = "New chat", options = {}) {
     const session = {
         id: randomUUID(),
         workspaceId,
         title,
+        taskEngine: resolveTaskEngine(options, STANDARD_TASK_ENGINE),
         status: "idle",
         createdAt: nowIso(),
         updatedAt: nowIso()

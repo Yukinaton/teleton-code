@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildWorkspacePath } from "../../../config/service-config.js";
@@ -75,14 +75,6 @@ export function createWorkspace(store, { name, path, icon }) {
         path || buildWorkspacePath(store.config, name)
     );
     mkdirSync(workspacePath, { recursive: true });
-    try {
-        writeFileSync(
-            join(workspacePath, ".teleton-workspace"),
-            JSON.stringify({ name, createdAt: nowIso() }, null, 2)
-        );
-    } catch (_error) {
-        // Marker file is best-effort only.
-    }
 
     const workspace = {
         id: randomUUID(),
@@ -128,10 +120,16 @@ export function deleteWorkspace(store, workspaceId) {
     store.state.workspaces = store.state.workspaces.filter((item) => item.id !== workspaceId);
     const sessionsToDelete = store.state.sessions.filter((session) => session.workspaceId === workspaceId);
     store.state.sessions = store.state.sessions.filter((session) => session.workspaceId !== workspaceId);
+    const deletedSessionIds = new Set(sessionsToDelete.map((session) => session.id));
 
     for (const session of sessionsToDelete) {
         delete store.state.messages[session.id];
     }
+
+    // Remove orphan tasks for deleted sessions and tasks directly bound to this workspace.
+    store.state.tasks = store.state.tasks.filter(
+        (task) => !deletedSessionIds.has(task.sessionId) && task.workspaceId !== workspaceId
+    );
 
     if (!store.getWorkspace(store.state.activeWorkspaceId)) {
         const nextWorkspace = store.listWorkspaces()[0] || null;

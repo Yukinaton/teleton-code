@@ -26,3 +26,6 @@ Thumbs.db
 # Temp and scratch artifacts
 client-new/block_history.txt
 client-new/original_chatview.tsx
+tmp/
+*.tmp
+demo/

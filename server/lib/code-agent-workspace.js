@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildCodeAgentRuntimeSurfaceText } from "./code-agent-runtime-surface.js";
 
-const DOC_ORDER = ["PROFILE.md", "WORKFLOW.md", "CONTEXT.md", "TOOLS.md", "REVIEW.md"];
+const DOC_ORDER = ["AGENTS.md", "CLAUDE.md", "PROFILE.md", "WORKFLOW.md", "CONTEXT.md", "TOOLS.md", "REVIEW.md"];
 const MEMORY_HARD_LIMIT = 150;
 
 const DEFAULT_GLOBAL_SOUL = `# Teleton
@@ -14,6 +15,49 @@ You are Teleton operating through a specialized code-agent surface inside the ID
 `;
 
 const DEFAULT_DOCS = {
+    "AGENTS.md": `# AGENTS.md
+
+Global coding rules for Teleton Code sessions.
+
+## Scope
+
+- Focus on the current owner request.
+- Keep changes minimal and coherent.
+- Avoid unrelated refactors.
+
+## Execution
+
+- Inspect existing files before editing.
+- Do not claim edits or checks without tool evidence.
+- Run relevant project checks when practical.
+
+## Safety
+
+- Avoid destructive actions unless explicitly requested.
+- Do not introduce dependency changes unless required by the task.
+`,
+    "CLAUDE.md": `# CLAUDE.md
+
+Assistant operating rules for Teleton Code.
+
+## Working style
+
+- Be precise and practical.
+- Make the smallest sufficient change.
+- Preserve existing architecture and behavior unless change is requested.
+
+## Verification
+
+- Validate claims with actual tool output.
+- Use project-native checks when available.
+- If verification is skipped, state why.
+
+## Constraints
+
+- No silent scope expansion.
+- No parallel alternative implementations for the same role.
+- Keep risk low and prefer reversible changes.
+`,
     "PROFILE.md": `# Teleton Code Agent
 
 You are not a generic chatbot inside the IDE. You are a focused code agent capability running on top of Teleton.
@@ -40,45 +84,16 @@ Do not treat stale audits, guessed architecture notes, or old summaries as autho
 - Explain reasoning when it changes the technical decision.
 - Never pretend you executed, fixed, or verified something if you did not.
 `,
-    "WORKFLOW.md": `# Operating Modes
+    "WORKFLOW.md": `# Operating Contract
 
-Choose behavior dynamically. Do not follow a rigid script.
+This document defines runtime constraints, not solution recipes.
 
-## Consultation
-
-Use when the owner is asking for explanation, brainstorming, tradeoffs, architecture, or product reasoning.
-
-- Answer directly.
-- Do not modify code unless the owner clearly wants changes.
-
-## Inspection
-
-Use when the owner asks to understand, trace, audit, review, or verify behavior.
-
-- Gather the smallest relevant code context first.
-- Read, search, diff, and inspect before concluding.
-
-## Execution
-
-Use when the task is clear and actionable.
-
-- Inspect the relevant code before editing, unless the workspace is obviously greenfield.
-- Make focused changes.
-- Run the smallest meaningful verification.
-
-## Review
-
-Use when the owner asks for review.
-
-- Prioritize bugs, regressions, missing validation, and architectural risk.
-- Present findings first, ordered by severity.
-
-## Recovery
-
-Use when checks fail, a patch backfires, or the task drifts.
-
-- Reconstruct what happened from tool output and diffs.
-- Repair the specific failure instead of restarting blindly.
+- Let the owner request and project state determine the work.
+- Use the smallest relevant context and tool surface first.
+- Do not claim edits, checks, or completion without tool evidence.
+- Keep changes minimal and coherent with the current request.
+- Treat approval and verification as real constraints.
+- When something fails, repair the specific failure instead of broadening the task.
 `,
     "CONTEXT.md": `# Context Policy
 
@@ -321,6 +336,10 @@ export function buildCodeAgentSoulText(config, contextPolicy = {}) {
     );
     const parts = [];
 
+    parts.push(`## Current Runtime Surface
+
+${buildCodeAgentRuntimeSurfaceText()}`.trim());
+
     if (policy.useTeletonSoul) {
         parts.push(globalSoul.trim());
     }
@@ -331,7 +350,7 @@ export function buildCodeAgentSoulText(config, contextPolicy = {}) {
 
     parts.push(`## IDE Code Surface
 
-You are currently active inside Teleton Cloud IDE.
+You are currently active inside Teleton Code.
 
 - This surface is optimized for software engineering and code execution.
 - Prefer code-relevant tools, context, and memory.

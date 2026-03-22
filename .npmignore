@@ -11,3 +11,6 @@ server/.teleton-code/
 client-new/*
 !client-new/dist/
 !client-new/dist/**
+tmp/
+docs/technical/
+demo/
