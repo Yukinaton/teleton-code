@@ -211,7 +211,7 @@ Chats keep their own session state and task progression inside that project.
 Current storage roots:
 
 ```text
-~/.teleton/workspace/projects/
+~/.teleton/workspace/ide/projects/
 ~/.teleton/workspace/ide/
 ~/.teleton/ide/teleton-code/
 ```

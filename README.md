@@ -239,7 +239,7 @@ server/
 
 - Teleton home: `~/.teleton`
 - IDE state: `~/.teleton/ide/teleton-code`
-- Projects: `~/.teleton/workspace/projects`
+- Projects: `~/.teleton/workspace/ide/projects`
 - IDE workspace metadata: `~/.teleton/workspace/ide`
 
 Legacy repo-local state folders are not part of the target layout and are ignored during normal development and packaging.

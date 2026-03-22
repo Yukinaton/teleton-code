@@ -47,6 +47,14 @@ function buildIdeDataRoot(teletonRoot) {
     return join(teletonRoot, "ide", "teleton-code");
 }
 
+function buildLegacyProjectsRoot(teletonWorkspaceRoot) {
+    return join(teletonWorkspaceRoot, "projects");
+}
+
+function buildIdeProjectsRoot(ideWorkspaceRoot) {
+    return join(ideWorkspaceRoot, "projects");
+}
+
 function legacyDataRoots(repoRoot) {
     return [join(repoRoot, ".teleton-code"), join(repoRoot, "server", ".teleton-code")].map(
         (path) => resolve(path)
@@ -92,6 +100,32 @@ function migrateLegacyDataRoot(repoRoot, targetDataRoot) {
 
     mkdirSync(target, { recursive: true });
     copyDirectoryContents(sourceWithState, target);
+}
+
+function migrateLegacyProjectsRoot(legacyProjectsRoot, targetProjectsRoot) {
+    const source = resolve(legacyProjectsRoot);
+    const target = resolve(targetProjectsRoot);
+
+    if (source === target || !existsSync(source)) {
+        return;
+    }
+
+    mkdirSync(target, { recursive: true });
+
+    const entries = readdirSync(source, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    for (const entry of entries) {
+        const sourceProjectPath = join(source, entry.name);
+        const targetProjectPath = join(target, entry.name);
+        if (existsSync(targetProjectPath)) {
+            continue;
+        }
+
+        cpSync(sourceProjectPath, targetProjectPath, {
+            recursive: true,
+            force: false,
+            errorOnExist: true
+        });
+    }
 }
 
 function detectNpmGlobalRoot() {
@@ -172,7 +206,7 @@ function defaultServiceConfig(repoRoot) {
     const teletonWorkspaceRoot = join(teletonRoot, "workspace");
     const ideWorkspaceRoot = join(teletonWorkspaceRoot, "ide");
     const dataRoot = buildIdeDataRoot(teletonRoot);
-    const workspaceBaseRoot = join(teletonWorkspaceRoot, "projects");
+    const workspaceBaseRoot = buildIdeProjectsRoot(ideWorkspaceRoot);
     return {
         version: 1,
         server: normalizeServerConfig({
@@ -237,8 +271,13 @@ export function loadServiceConfig(repoRoot) {
         !config.runtime?.dataRoot || isLegacyRepoDataRoot(repoRoot, config.runtime.dataRoot)
             ? buildIdeDataRoot(teletonRoot)
             : config.runtime.dataRoot;
+    const legacyProjectsRoot = buildLegacyProjectsRoot(teletonWorkspaceRoot);
+    const defaultProjectsRoot = buildIdeProjectsRoot(ideWorkspaceRoot);
+    const workspaceBaseRootCandidate = config.runtime?.workspaceBaseRoot;
     const workspaceBaseRoot =
-        config.runtime?.workspaceBaseRoot || join(teletonWorkspaceRoot, "projects");
+        !workspaceBaseRootCandidate || resolve(workspaceBaseRootCandidate) === resolve(legacyProjectsRoot)
+            ? defaultProjectsRoot
+            : workspaceBaseRootCandidate;
     const ideCodeAgentRoot =
         config.runtime?.ideCodeAgentRoot || join(ideWorkspaceRoot, "code-agent");
     const ideProjectsMetaRoot =
@@ -254,6 +293,7 @@ export function loadServiceConfig(repoRoot) {
     mkdirSync(workspaceBaseRoot, {
         recursive: true
     });
+    migrateLegacyProjectsRoot(legacyProjectsRoot, workspaceBaseRoot);
     mkdirSync(ideCodeAgentRoot, { recursive: true });
     mkdirSync(ideProjectsMetaRoot, { recursive: true });
     mkdirSync(ideChatsMetaRoot, { recursive: true });

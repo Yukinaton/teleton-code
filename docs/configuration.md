@@ -102,7 +102,7 @@ Teleton Code stores runtime data under the Teleton home, not in the repository:
 
 ### What lives where
 
-- `workspace/projects/` contains project files
+- `workspace/ide/projects/` contains project files
 - `workspace/ide/code-agent/` contains IDE-specific agent workspace files
 - `workspace/ide/projects/` contains IDE project metadata
 - `workspace/ide/chats/` contains IDE chat metadata
